@@ -196,12 +196,18 @@ module Project(
 		endcase
 
 	// TODO : Generate the dobranch, brtarg, isjump, and jmptarg signals somehow...
+	//
+	// isjump can be generated in decode
+	// dobranch brtarg, and jmptarg can be set to aluout_A
+	
 	wire [(DBITS - 1) : 0] pcgood_A = dobranch_A ? brtarg_A: (isjump_A ? jmptarg_A: pcplus_A);
 	wire mispred_A = (pcgood_A ! = pcpred_A);
 	wire mispred_B = mispred_A && !isnop_A;
 	wire [(DBITS - 1) : 0] pcgood_B = pcgood_A;
 
 	// TODO : This is a good place to generate the flush_ ? signals
+	//
+	// when a stage is flushed, all of its registers get cleared
 
 	/*
 	 * ----------------------------- MEM ----------------------------- 
