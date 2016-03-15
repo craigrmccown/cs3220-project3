@@ -78,13 +78,17 @@ module Project(
 	
 	always @(posedge clk) begin
 	if(reset)
-		PC < = STARTPC;
+		PC <= STARTPC;
 	else if(mispred_B)
-		PC < = pcgood_B;
+		PC <= pcgood_B;
 	else if(!stall_F)
-		PC < = pcpred_F;
+		PC <= pcpred_F;
 	end
 	
+	/*
+	 * ----------------------------- FETCH ----------------------------- 
+	 */
+	 
 	// This is the value of "incremented PC", computed in stage 1
 	wire [(DBITS - 1) : 0] pcplus_F = PC + INSTSIZE;
 	
@@ -97,6 +101,10 @@ module Project(
 	reg [(DBITS - 1) : 0] imem[(IMEMWORDS - 1) : 0];
 	wire [(DBITS - 1) : 0] inst_F = imem[PC[(IMEMADDRBITS - 1) : IMEMWORDBITS]];
 
+	/*
+	 * ----------------------------- DECODE ----------------------------- 
+	 */
+	 
 	// If fetch and decoding stages are the same stage,
 	// just connect signals from fetch to decode
 	wire [(DBITS - 1) : 0] inst_D = inst_F;
@@ -106,11 +114,13 @@ module Project(
 	// Instruction decoding
 	// These have zero delay from inst_D
 	// because they are just new names for those signals
-	wire [(OP1BITS - 1) : 0]	 op1_D = inst_D[(DBITS - 1) : (DBITS - OP1BITS)];
+	wire [(OP1BITS - 1) : 0] op1_D = inst_D[(DBITS - 1) : (DBITS - OP1BITS)];
 	wire [(REGNOBITS - 1) : 0] rs_D, rt_D, rd_D;
 	assign {rs_D, rt_D, rd_D} = inst_D[(DBITS - OP1BITS - 1) : (DBITS - OP1BITS - 3 * REGNOBITS)];
 	wire [(OP2BITS - 1) : 0] op2_D = inst_D[(OP2BITS - 1) : 0];
 	wire [(IMMBITS - 1) : 0] rawimm_D = inst_D[(IMMBITS - 1) : 0];
+	wire [(DBITS - 1) : 0] sxtimm_D;
+	SXT #(.IBITS(IMMBITS), .OBITS(DBITS)) sxt(.IN(rawimm_D), .OUT(sxtimm_D));
 	
 	// Register - read
 	reg [(DBITS - 1) : 0] regs[(REGWORDS - 1) : 0];
@@ -119,11 +129,55 @@ module Project(
 	wire [(REGNOBITS - 1) : 0] rregno1_D = rs_D, rregno2_D = rt_D;
 	wire [(DBITS - 1) : 0] regval1_D = regs[rregno1_D];
 	wire [(DBITS - 1) : 0] regval2_D = regs[rregno2_D];
+	
+	// Create decode registers
+	reg aluimm_D, isbranch_D, isjump_D, isnop_D, wrmem_D, selaluout_D, selmemout_D, selpcplus_D, wrreg_D;
+	reg [(OP2BITS - 1) : 0] alufunc_D;
+	reg [(REGNOBITS - 1) : 0] wregno_D;
+	
+	// Decoding logic
+	always @ * begin
+		{aluimm_D, alufunc_D} = {1'bX,{OP2BITS{1'bX}}};
+		{isbranch_D, isjump_D, isnop_D, wrmem_D} = {1'b0, 1'b0, 1'b0, 1'b0};
+		{selaluout_D, selmemout_D, selpcplus_D, wregno_D, wrreg_D} = {1'bX, 1'bX, 1'bX, {REGNOBITS{1'bX}}, 1'b0};
+		
+		if(reset | flush_D)
+			isnop_D = 1'b1;
+		else case(op1_D)
+			OP1_ALUR:
+				{aluimm_D, alufunc_D, selaluout_D, selmemout_D, selpcplus_D, wregno_D, wrreg_D} =
+				{1'b0, op2_D, 1'b1, 1'b0, 1'b0, rd_D, 1'b1};
+		
+			// TODO : Write the rest of the decoding code
+			default : ;
+		endcase
+	end
 
-	// TODO : Get these signals to the ALU somehow
+	/*
+	 * ----------------------------- ALU ----------------------------- 
+	 */
+	 
+	// Connect to decode stage with wires if they are in the same stage
+	wire aluimm_A = aluimm_D, selaluout_A = selaluout_D;
+	wire [(OP1BITS - 1) : 0] op1_A = op1_D;
+	wire [(OP2BITS - 1) : 0] op2_A = op2_D;
+	wire [(REGNOBITS - 1) : 0] rd_A = rd_D;
+	wire [(DBITS - 1) : 0] regval1_A, regval2_A, sxtimm_A;
+	assign {regval1_A, regval2_A, sxtimm_A} = {regval1_D, regval2_D, sxtimm_D};
 	
-	reg signed [(DBITS - 1) : 0] aluout_A;
+	// Create ALU registers
+	reg [(OP1BITS - 1) : 0] alufunc_A;
+	reg [(DBITS - 1) : 0] aluin1_A, aluin2_A;
 	
+	always @(posedge clk) begin
+		if (!reset) begin
+			alufunc_A <= aluimm_A ? op2_A : op1_A;
+			aluin1_A <= regval1_A;
+			aluin2_A <= aluimm_A ? regval2_A : sxtimm_A;
+		end
+	end
+	
+	// Create ALU
 	always @(alufunc_A or aluin1_A or aluin2_A)
 		case(alufunc_A)
 			OP2_EQ : aluout_A = {31'b0, aluin1_A == aluin2_A};
@@ -149,12 +203,19 @@ module Project(
 
 	// TODO : This is a good place to generate the flush_ ? signals
 
+	/*
+	 * ----------------------------- MEM ----------------------------- 
+	 */
+	 
 	// TODO : Write code that produces wmemval_M, wrmem_M, wrreg_M, etc.
 	
+	// Create pipeline buffer for M stage
 	reg [(DBITS - 1) : 0] aluout_M, pcplus_M;
+	reg [(REGNOBITS - 1) : 0] rd_M;
+	reg aluimm_M, selaluout_M;
 	
 	always @(posedge clk)
-		{aluout_M,pcplus_M} <= {aluout_A,pcplus_A};
+		{aluout_M, pcplus_M, rd_M, aluimm_M, selaluout_M} <= {aluout_A, pcplus_A, rd_A, aluimm_A, selaluout_A};
 
 	// Create and connect HEX register
 	reg [23 : 0] HexOut;
@@ -189,31 +250,16 @@ module Project(
 	// Connect memory and input devices to the bus
 	wire [(DBITS - 1) : 0] memout_M = MemEnable ? MemVal : (
 		(memaddr_M == ADDRKEY) ? {12'b0, ~KEY} : (
-			(memaddr_M == ADDRSW) ? { 6'b0,SW} : 32'hDEADDEAD)
+			(memaddr_M == ADDRSW) ? {6'b0, SW} : 32'hDEADDEAD)
 		);
 
-	// TODO : Decide what gets written into the destination register (wregval_M),
+	// Decide what gets written into the destination register (wregval_M),
 	// when it gets written (wrreg_M) and to which register it gets written (wregno_M)
+	wire wregval_M = aluout_M;
+	wire wrreg_M = selaluout_M;
+	wire [(REGNOBITS - 1) : 0] wregno_M = rd_M;
 
 	always @(posedge clk)
 		if(wrreg_M && !reset)
 			regs[wregno_M] <= wregval_M;
-
-	// Decoding logic
-	always @ * begin
-		{aluimm_D, alufunc_D} = {1'bX,{OP2BITS{1'bX}}};
-		{isbranch_D, isjump_D, isnop_D, wrmem_D} = {1'b0, 1'b0, 1'b0, 1'b0};
-		{selaluout_D, selmemout_D, selpcplus_D, wregno_D, wrreg_D} = {1'bX, 1'bX, 1'bX, {REGNOBITS{1'bX}}, 1'b0};
-		
-		if(reset | flush_D)
-			isnop_D = 1'b1;
-		else case(op1_D)
-			OP1_ALUR:
-				{aluimm_D, alufunc_D, selaluout_D, selmemout_D, selpcplus_D, wregno_D, wrreg_D} =
-				{1'b0, op2_D, 1'b1, 1'b0, 1'b0, rd_D, 1'b1};
-		
-			// TODO : Write the rest of the decoding code
-			default : ;
-		endcase
-	end
 endmodule
