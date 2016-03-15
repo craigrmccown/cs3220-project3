@@ -207,8 +207,6 @@ module Project(
 	 * ----------------------------- MEM ----------------------------- 
 	 */
 	 
-	// TODO : Write code that produces wmemval_M, wrmem_M, wrreg_M, etc.
-	
 	// Create pipeline buffer for M stage
 	reg [(DBITS - 1) : 0] aluout_M, pcplus_M;
 	reg [(REGNOBITS - 1) : 0] rd_M;
