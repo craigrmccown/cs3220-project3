@@ -220,6 +220,10 @@ module Project(
 	
 	always @(posedge clk)
 		{aluout_M, pcplus_M, rd_M, aluimm_M, selaluout_M, wrmem_M} <= {aluout_A, pcplus_A, rd_A, aluimm_A, selaluout_A, wrmem_A};
+		
+	// Create memory signals
+	wire [(DBITS - 1)] memaddr_M, wmemval_M;
+	assign {memaddr_M, wmemval_M} = {psplus_M, aluout_M};
 
 	// Create and connect HEX register
 	reg [23 : 0] HexOut;
@@ -237,10 +241,6 @@ module Project(
 			HexOut <= wmemval_M[23 : 0];
 
 	// TODO : Write the code for LEDR here
-
-	// Create memory signals
-	wire [(DBITS - 1)] memaddr_M, wmemval_M;
-	assign {memaddr_M, wmemval_M} = {psplus_M, aluout_M};
 	
 	// Now the real data memory
 	wire MemEnable = !(memaddr_M[(DBITS - 1) : DMEMADDRBITS]);
