@@ -158,7 +158,7 @@ module Project(
 	 */
 	 
 	// Connect to decode stage with wires if they are in the same stage
-	wire aluimm_A = aluimm_D, selaluout_A = selaluout_D;
+	wire aluimm_A = aluimm_D, selaluout_A = selaluout_D, wrmem_A = wrmem_D;
 	wire [(OP1BITS - 1) : 0] op1_A = op1_D;
 	wire [(OP2BITS - 1) : 0] op2_A = op2_D;
 	wire [(REGNOBITS - 1) : 0] rd_A = rd_D;
@@ -212,10 +212,10 @@ module Project(
 	// Create pipeline buffer for M stage
 	reg [(DBITS - 1) : 0] aluout_M, pcplus_M;
 	reg [(REGNOBITS - 1) : 0] rd_M;
-	reg aluimm_M, selaluout_M;
+	reg aluimm_M, selaluout_M, wrmem_M;
 	
 	always @(posedge clk)
-		{aluout_M, pcplus_M, rd_M, aluimm_M, selaluout_M} <= {aluout_A, pcplus_A, rd_A, aluimm_A, selaluout_A};
+		{aluout_M, pcplus_M, rd_M, aluimm_M, selaluout_M, wrmem_M} <= {aluout_A, pcplus_A, rd_A, aluimm_A, selaluout_A, wrmem_A};
 
 	// Create and connect HEX register
 	reg [23 : 0] HexOut;
@@ -234,6 +234,10 @@ module Project(
 
 	// TODO : Write the code for LEDR here
 
+	// Create memory signals
+	wire [(DBITS - 1)] memaddr_M, wmemval_M;
+	assign {memaddr_M, wmemval_M} = {psplus_M, aluout_M};
+	
 	// Now the real data memory
 	wire MemEnable = !(memaddr_M[(DBITS - 1) : DMEMADDRBITS]);
 	wire MemWE = (!reset) & wrmem_M & MemEnable;
