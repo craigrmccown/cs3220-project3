@@ -301,7 +301,14 @@ module Project(
 		else if(wrmem_M && (memaddr_M == ADDRHEX))
 			HexOut <= wmemval_M[23 : 0];
 
-	// TODO : Write the code for LEDR here
+	// Create and connect LEDR register
+	reg [9 : 0] LEDROut;
+	
+	always @(posedge clk or posedge reset)
+		if(reset)
+			LEDROut <= 10'd0;
+		else if(wrmem_M && (memaddr_M == ADDRLEDR))
+			LEDROut <= wmemval_M[9 : 0];
 	
 	// Now the real data memory
 	wire MemEnable = !(memaddr_M[(DBITS - 1) : DMEMADDRBITS]);
