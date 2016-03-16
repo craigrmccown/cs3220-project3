@@ -178,7 +178,7 @@ module Project(
 							OP1_ADDI, OP1_ANDI, OP1_ORI, OP1_XORI:
 								{selaluout_D, selmemout_D, selpcplus_D} =
 								{1'b1, 1'b0, 1'b0};
-							default:  ; // TODO error state or nop?
+							default:  isnop_D = 1'b1;
 						endcase
 				endcase
 		endcase
@@ -263,7 +263,7 @@ module Project(
 	reg flush_D;
 	
 	always @(posedge clk)
-		flush_D <= !reset && mispred_B
+		flush_D <= !reset && (mispred_B || isjump_A);
 
 	/*
 	 * ----------------------------- MEM ----------------------------- 
