@@ -1,6 +1,6 @@
 module Project(
-	input				CLOCK_50,
-	input				RESET_N,
+	input CLOCK_50,
+	input RESET_N,
 	input	[3 : 0] KEY,
 	input	[9 : 0] SW,
 	output [6 : 0] HEX0,
@@ -77,14 +77,14 @@ module Project(
 	reg [(DBITS - 1) : 0] PC;
 	
 	always @(posedge clk) begin
-	if(reset)
-		PC <= STARTPC;
-	else if(mispred_B)
-		PC <= pcgood_B;
-	else if(!stall_F)
-		PC <= pcpred_F;
+		if(reset)
+			PC <= STARTPC;
+		else if(mispred_B)
+			PC <= pcgood_B;
+		else if(!stall_F)
+			PC <= pcpred_F;
 	end
-	
+		
 	/*
 	 * ----------------------------- FETCH ----------------------------- 
 	 */
@@ -143,13 +143,43 @@ module Project(
 		
 		if(reset | flush_D)
 			isnop_D = 1'b1;
-		else case(op1_D)
+		else case (op1_D)
 			OP1_ALUR:
+				// ALUR ops
 				{aluimm_D, alufunc_D, selaluout_D, selmemout_D, selpcplus_D, wregno_D, wrreg_D} =
 				{1'b0, op2_D, 1'b1, 1'b0, 1'b0, rd_D, 1'b1};
-		
-			// TODO : Write the rest of the decoding code
-			default : ;
+			default:
+				// ALUI ops
+				{aluimm_D, alufunc_D} = {1'b1, op1_D};
+				
+				case (op1_D)
+					// Ops that don't write to a register
+					OP1_BEQ, OP1_BNE, OP1_BLT, OP1_BLE:
+						{isbranch_D, selaluout_D, selmemout_D, selpcplus_D} =
+						{1'b1, 1'b1, 1'b0, 1'b0};
+					OP1_SW:
+						{wrmem_D, selaluout_D, selmemout_D, selpcplus_D} =
+						{1'b1, 1'b0, 1'b0, 1'b0};
+					default:
+						// Ops that write to rt
+						{wrreg_D, wregno_D} = {1'b1, rt_D}
+						
+						case (op1_D)
+							OP1_JAL:
+								{isjump_D, selaluout_D, selmemout_D, selpcplus_D} =
+								{1'b1, 1'b0, 1'b0, 1'b1};
+							OP1_LW:
+								{selaluout_D, selmemout_D, selpcplus_D} =
+								{1'b0, 1'b1, 1'b0};
+							OP1_SW:
+								{wrmem_D, selaluout_D, selmemout_D, selpcplus_D} =
+								{1'b1, 1'b0, 1'b0, 1'b0};
+							OP1_ADDI, OP1_ANDI, OP1_ORI, OP1_XORI:
+								{selaluout_D, selmemout_D, selpcplus_D} =
+								{1'b1, 1'b0, 1'b0};
+							default:  ; // TODO error state or nop?
+						endcase
+				endcase
 		endcase
 	end
 
@@ -158,12 +188,23 @@ module Project(
 	 */
 	 
 	// Connect to decode stage with wires if they are in the same stage
-	wire aluimm_A = aluimm_D, selaluout_A = selaluout_D, wrmem_A = wrmem_D;
+	wire aluimm_A = aluimm_D,
+		selaluout_A = selaluout_D,
+		wrmem_A = wrmem_D;
+		isbranch_A = isbranch_D,
+		isjump_A = isjump_D,
+		isnop_A = isnop_D,
+		wrmem_A = wrmem_D,
+		selaluout_A = selaluout_D,
+		selmemout_A = selmemout_D,
+		selpcplus_A = selpcplus_D,
+		wrreg_A = wrreg_D;
+		
 	wire [(OP1BITS - 1) : 0] op1_A = op1_D;
 	wire [(OP2BITS - 1) : 0] op2_A = op2_D;
-	wire [(REGNOBITS - 1) : 0] rd_A = rd_D;
 	wire [(DBITS - 1) : 0] regval1_A, regval2_A, sxtimm_A;
-	assign {regval1_A, regval2_A, sxtimm_A} = {regval1_D, regval2_D, sxtimm_D};
+	wire [(REGNOBITS - 1) : 0] wregno_A;
+	assign {regval1_A, regval2_A, sxtimm_A, wregno_A} = {regval1_D, regval2_D, sxtimm_D, wregno_D};
 	
 	// Create ALU registers
 	reg [(OP1BITS - 1) : 0] alufunc_A;
@@ -171,9 +212,9 @@ module Project(
 	
 	always @(posedge clk) begin
 		if (!reset) begin
-			alufunc_A <= aluimm_A ? op2_A : op1_A;
+			alufunc_A <= aluimm_A ? op1_A : op2_A;
 			aluin1_A <= regval1_A;
-			aluin2_A <= aluimm_A ? regval2_A : sxtimm_A;
+			aluin2_A <= aluimm_A ? sxtimm_A : regval2_A;
 		end
 	end
 	
@@ -198,7 +239,7 @@ module Project(
 	// TODO : Generate the dobranch, brtarg, isjump, and jmptarg signals somehow...
 	//
 	// isjump can be generated in decode
-	// dobranch brtarg, and jmptarg can be set to aluout_A
+	// dobranch, brtarg, and jmptarg can be calculated based on decode signals
 	
 	wire [(DBITS - 1) : 0] pcgood_A = dobranch_A ? brtarg_A: (isjump_A ? jmptarg_A: pcplus_A);
 	wire mispred_A = (pcgood_A ! = pcpred_A);
