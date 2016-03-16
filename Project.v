@@ -202,9 +202,9 @@ module Project(
 		
 	wire [(OP1BITS - 1) : 0] op1_A = op1_D;
 	wire [(OP2BITS - 1) : 0] op2_A = op2_D;
-	wire [(DBITS - 1) : 0] regval1_A, regval2_A, sxtimm_A;
-	wire [(REGNOBITS - 1) : 0] wregno_A;
-	assign {regval1_A, regval2_A, sxtimm_A, wregno_A} = {regval1_D, regval2_D, sxtimm_D, wregno_D};
+	wire [(REGNOBITS - 1) : 0] wregno_A = wregno_D;
+	wire [(DBITS - 1) : 0] pcplus_A, regval1_A, regval2_A, sxtimm_A;
+	assign {pcplus_A, regval1_A, regval2_A, sxtimm_A} = {pcplus_D, regval1_D, regval2_D, sxtimm_D};
 	
 	// Create ALU registers
 	reg [(OP1BITS - 1) : 0] alufunc_A;
@@ -255,17 +255,21 @@ module Project(
 	 */
 	 
 	// Create pipeline buffer for M stage
-	reg [(DBITS - 1) : 0] aluout_M, pcplus_M;
-	reg [(REGNOBITS - 1) : 0] rd_M;
-	reg aluimm_M, selaluout_M, wrmem_M;
+	reg wrmem_M, isbranch_M, isjump_M, isnop_M, wrmem_M, selaluout_M, selmemout_M, selpcplus_M, wrreg_M;
+	reg [(DBITS - 1) : 0] aluout_M, pcplus_M, regval1_M, regval2_M;
+	wire [(REGNOBITS - 1) : 0] wregno_M;
 	
-	always @(posedge clk)
-		{aluout_M, pcplus_M, rd_M, aluimm_M, selaluout_M, wrmem_M} <= {aluout_A, pcplus_A, rd_A, aluimm_A, selaluout_A, wrmem_A};
+	always @(posedge clk) begin
+		{wrmem_M, isbranch_M, isjump_M, isnop_M, wrmem_M, selaluout_M, selmemout_M, selpcplus_M, wrreg_M} <=
+		{wrmem_A, isbranch_A, isjump_A, isnop_A, wrmem_A, selaluout_A, selmemout_A, selpcplus_A, wrreg_A};
+		{aluout_M, pcplus_M, regval1_M, regval2_M} <= {aluout_A, pcplus_A, regval1_A, regval2_A};
+		wregno_M <= wregno_A;
+	end
 		
 	// Create memory signals
 	wire [(DBITS - 1)] memaddr_M, wmemval_M;
-	assign {memaddr_M, wmemval_M} = {psplus_M, aluout_M};
-
+	assign {memaddr_M, wmemval_M} = {aluout_M, regval1_M};
+	
 	// Create and connect HEX register
 	reg [23 : 0] HexOut;
 	SevenSeg ss5(.OUT(HEX5),.IN(HexOut[23 : 20]));
@@ -304,9 +308,11 @@ module Project(
 
 	// Decide what gets written into the destination register (wregval_M),
 	// when it gets written (wrreg_M) and to which register it gets written (wregno_M)
-	wire wregval_M = aluout_M;
-	wire wrreg_M = selaluout_M;
-	wire [(REGNOBITS - 1) : 0] wregno_M = rd_M;
+	wire wregval_M = selpcplus_M ? pcplus_M : (
+		selaluout_M ? aluout_M : (
+			selmemout_M ? memout_m : {(REGNOBITS){1'bX}}
+		)
+	);
 
 	always @(posedge clk)
 		if(wrreg_M && !reset)
