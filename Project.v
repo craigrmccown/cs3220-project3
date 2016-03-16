@@ -82,7 +82,7 @@ module Project(
 			PC <= STARTPC;
 		else if(mispred_B)
 			PC <= pcgood_B;
-		else if(!stall_F)
+		else if(!stall_F) // TODO what is stall_F?
 			PC <= pcpred_F;
 	end
 		
@@ -190,8 +190,6 @@ module Project(
 	 
 	// Connect to decode stage with wires if they are in the same stage
 	wire aluimm_A = aluimm_D,
-		selaluout_A = selaluout_D,
-		wrmem_A = wrmem_D;
 		isbranch_A = isbranch_D,
 		isjump_A = isjump_D,
 		isnop_A = isnop_D,
@@ -204,19 +202,17 @@ module Project(
 	wire [(OP1BITS - 1) : 0] op1_A = op1_D;
 	wire [(OP2BITS - 1) : 0] op2_A = op2_D;
 	wire [(REGNOBITS - 1) : 0] wregno_A = wregno_D;
-	wire [(DBITS - 1) : 0] pcplus_A, regval1_A, regval2_A, sxtimm_A;
-	assign {pcplus_A, regval1_A, regval2_A, sxtimm_A} = {pcplus_D, regval1_D, regval2_D, sxtimm_D};
+	wire [(DBITS - 1) : 0] pcplus_A, regval1_A, regval2_A, sxtimm_A, pcpred_A;
+	assign {pcplus_A, regval1_A, regval2_A, sxtimm_A, pcpred_A} = {pcplus_D, regval1_D, regval2_D, sxtimm_D, pcpred_D};
 	
 	// Create ALU registers
 	reg [(OP1BITS - 1) : 0] alufunc_A;
 	reg [(DBITS - 1) : 0] aluin1_A, aluin2_A;
 	
 	always @(posedge clk) begin
-		if (!reset) begin
-			alufunc_A <= aluimm_A ? op1_A : op2_A;
-			aluin1_A <= regval1_A;
-			aluin2_A <= aluimm_A ? sxtimm_A : regval2_A;
-		end
+		alufunc_A <= aluimm_A ? op1_A : op2_A;
+		aluin1_A <= regval1_A;
+		aluin2_A <= aluimm_A ? sxtimm_A : regval2_A;
 	end
 	
 	// Create ALU
@@ -240,8 +236,7 @@ module Project(
 	// Generate branch and jump signals
 	wire dobranch_A = isbranch_A && aluout_A[0] == 1;
 	wire [(DBITS - 1) : 0] brtarg_A = sxtimm_A + pcplus_A;
-	wire [(DBITS - 1) : 0] jumptarg_A = (sxtimm_A << 2) + regval1_A;
-	reg [(DBITS - 1) : 0] pcpred_A;
+	wire [(DBITS - 1) : 0] jmptarg_A = (sxtimm_A << 2) + regval1_A;
 	
 	// Decide what to do based off of signals and branch prediction
 	wire [(DBITS - 1) : 0] pcgood_A = dobranch_A ? brtarg_A : (isjump_A ? jmptarg_A : pcplus_A);
@@ -249,7 +244,10 @@ module Project(
 	wire mispred_B = mispred_A && !isnop_A;
 	wire [(DBITS - 1) : 0] pcgood_B = pcgood_A;
 	
+	/*
 	// Branch prediction
+	
+	reg [(DBITS - 1) : 0] pcpred_A;
 	reg [(DBITS - 1) : 0] branchpred_A[(REGWORDS - 1) : 0]
 	wire [(BRANCHPREDBITS - 1) : 0] predidx_A = pcplus_A[(BRANCHPREDBITS + 2 - 1) : 2];
 	
@@ -259,6 +257,7 @@ module Project(
 		if (mispred_B)
 			branchpred_A[predidx_A] <= pcgood_B;
 	end
+	*/
 
 	// Generate the flush signals
 	reg flush_D;
@@ -271,13 +270,12 @@ module Project(
 	 */
 	 
 	// Create pipeline buffer for M stage
-	reg wrmem_M, isbranch_M, isjump_M, isnop_M, wrmem_M, selaluout_M, selmemout_M, selpcplus_M, wrreg_M;
+	reg wrmem_M, selaluout_M, selmemout_M, selpcplus_M, wrreg_M;
 	reg [(DBITS - 1) : 0] aluout_M, pcplus_M, regval1_M, regval2_M;
 	wire [(REGNOBITS - 1) : 0] wregno_M;
 	
 	always @(posedge clk) begin
-		{wrmem_M, isbranch_M, isjump_M, isnop_M, wrmem_M, selaluout_M, selmemout_M, selpcplus_M, wrreg_M} <=
-		{wrmem_A, isbranch_A, isjump_A, isnop_A, wrmem_A, selaluout_A, selmemout_A, selpcplus_A, wrreg_A};
+		{wrmem_M, selaluout_M, selmemout_M, selpcplus_M, wrreg_M} <= {wrmem_A, selaluout_A, selmemout_A, selpcplus_A, wrreg_A};
 		{aluout_M, pcplus_M, regval1_M, regval2_M} <= {aluout_A, pcplus_A, regval1_A, regval2_A};
 		wregno_M <= wregno_A;
 	end
