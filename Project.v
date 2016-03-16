@@ -30,6 +30,7 @@ module Project(
 	parameter DMEMADDRBITS = 16;
 	parameter DMEMWORDBITS = 2;
 	parameter DMEMWORDS = (1 << (DMEMADDRBITS - DMEMWORDBITS));
+	parameter BRANCHPREDBITS = 4;
 	
 	parameter OP1BITS = 6;
 	parameter OP1_ALUR = 6'b000000;
@@ -236,19 +237,34 @@ module Project(
 			default : aluout_A = {DBITS{1'bX}};
 		endcase
 
-	// TODO : Generate the dobranch, brtarg, isjump, and jmptarg signals somehow...
-	//
-	// isjump can be generated in decode
-	// dobranch, brtarg, and jmptarg can be calculated based on decode signals
+	// Generate branch and jump signals
+	wire dobranch_A = isbranch_A && aluout_A[0] == 1;
+	wire [(DBITS - 1) : 0] brtarg_A = sxtimm_A + pcplus_A;
+	wire [(DBITS - 1) : 0] jumptarg_A = (sxtimm_A << 2) + regval1_A;
+	reg [(DBITS - 1) : 0] pcpred_A;
 	
-	wire [(DBITS - 1) : 0] pcgood_A = dobranch_A ? brtarg_A: (isjump_A ? jmptarg_A: pcplus_A);
-	wire mispred_A = (pcgood_A ! = pcpred_A);
+	// Decide what to do based off of signals and branch prediction
+	wire [(DBITS - 1) : 0] pcgood_A = dobranch_A ? brtarg_A : (isjump_A ? jmptarg_A : pcplus_A);
+	wire mispred_A = (pcgood_A != pcpred_A);
 	wire mispred_B = mispred_A && !isnop_A;
 	wire [(DBITS - 1) : 0] pcgood_B = pcgood_A;
+	
+	// Branch prediction
+	reg [(DBITS - 1) : 0] branchpred_A[(REGWORDS - 1) : 0]
+	wire [(BRANCHPREDBITS - 1) : 0] predidx_A = pcplus_A[(BRANCHPREDBITS + 2 - 1) : 2];
+	
+	always @(posedge clk) begin
+		pcpred_A <= isbranch_A ? branchpred_A[predidx] : (isjump_A ? jmptarg_A : pcplus_A);
+		
+		if (mispred_B)
+			branchpred_A[predidx_A] <= pcgood_B;
+	end
 
-	// TODO : This is a good place to generate the flush_ ? signals
-	//
-	// when a stage is flushed, all of its registers get cleared
+	// Generate the flush signals
+	reg flush_D;
+	
+	always @(posedge clk)
+		flush_D <= !reset && mispred_B
 
 	/*
 	 * ----------------------------- MEM ----------------------------- 
