@@ -78,11 +78,11 @@ module Project(
 	reg [(DBITS - 1) : 0] PC;
 	
 	always @(posedge clk) begin
-		if(reset)
+		if (reset)
 			PC <= STARTPC;
-		else if(mispred_B)
+		else if (mispred_B)
 			PC <= pcgood_B;
-		else if(!stall_F) // TODO what is stall_F?
+		else if (!stall_F)
 			PC <= pcpred_F;
 	end
 		
@@ -278,6 +278,19 @@ module Project(
 		{wrmem_M, selaluout_M, selmemout_M, selpcplus_M, wrreg_M} <= {wrmem_A, selaluout_A, selmemout_A, selpcplus_A, wrreg_A};
 		{aluout_M, pcplus_M, regval1_M, regval2_M} <= {aluout_A, pcplus_A, regval1_A, regval2_A};
 		wregno_M <= wregno_A;
+	end
+	
+	// Handle data hazards
+	reg stall_F, stalled;
+	wire hazard = !stalled && wrreg_M && ((wregno_M == rs_D) || (wregno_M == rt_D));
+	
+	always @(posedge clk) begin
+		stalled <= 0;
+		
+		if (!reset) begin
+			stall_F <= hazard;
+			stalled <= 1;
+		end
 	end
 		
 	// Create memory signals
