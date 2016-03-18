@@ -23,7 +23,7 @@ module Project(
 	parameter ADDRLEDR = 32'hFFFFF020;
 	parameter ADDRKEY = 32'hFFFFF080;
 	parameter ADDRSW = 32'hFFFFF090;
-	parameter IMEMINITFILE = "Sorter3.mif";
+	parameter IMEMINITFILE = "Test2.mif";
 	parameter IMEMADDRBITS = 16;
 	parameter IMEMWORDBITS = 2;
 	parameter IMEMWORDS = (1 << (IMEMADDRBITS - IMEMWORDBITS));
@@ -98,7 +98,7 @@ module Project(
 	wire [(DBITS - 1) : 0] pcpred_F = pcplus_F;
 
 	// Instruction - fetch
-	( * ram_init_file = IMEMINITFILE * )
+	(* ram_init_file = IMEMINITFILE *)
 	reg [(DBITS - 1) : 0] imem[(IMEMWORDS - 1) : 0];
 	wire [(DBITS - 1) : 0] inst_F = imem[PC[(IMEMADDRBITS - 1) : IMEMWORDBITS]];
 
@@ -106,8 +106,7 @@ module Project(
 	 * ----------------------------- DECODE ----------------------------- 
 	 */
 	 
-	// If fetch and decoding stages are the same stage,
-	// just connect signals from fetch to decode
+	// Create pipeline buffer for stage D
 	wire [(DBITS - 1) : 0] inst_D = inst_F;
 	wire [(DBITS - 1) : 0] pcplus_D = pcplus_F;
 	wire [(DBITS - 1) : 0] pcpred_D = pcpred_F;
@@ -149,7 +148,7 @@ module Project(
 				// ALUR ops
 				{aluimm_D, alufunc_D, selaluout_D, selmemout_D, selpcplus_D, wregno_D, wrreg_D} =
 				{1'b0, op2_D, 1'b1, 1'b0, 1'b0, rd_D, 1'b1};
-			default:
+			default: begin
 				// ALUI ops
 				{aluimm_D, alufunc_D} = {1'b1, op1_D};
 				
@@ -161,9 +160,9 @@ module Project(
 					OP1_SW:
 						{wrmem_D, selaluout_D, selmemout_D, selpcplus_D} =
 						{1'b1, 1'b0, 1'b0, 1'b0};
-					default:
+					default: begin
 						// Ops that write to rt
-						{wrreg_D, wregno_D} = {1'b1, rt_D}
+						{wrreg_D, wregno_D} = {1'b1, rt_D};
 						
 						case (op1_D)
 							OP1_JAL:
@@ -172,15 +171,14 @@ module Project(
 							OP1_LW:
 								{selaluout_D, selmemout_D, selpcplus_D} =
 								{1'b0, 1'b1, 1'b0};
-							OP1_SW:
-								{wrmem_D, selaluout_D, selmemout_D, selpcplus_D} =
-								{1'b1, 1'b0, 1'b0, 1'b0};
 							OP1_ADDI, OP1_ANDI, OP1_ORI, OP1_XORI:
 								{selaluout_D, selmemout_D, selpcplus_D} =
 								{1'b1, 1'b0, 1'b0};
 							default:  isnop_D = 1'b1;
 						endcase
+					end
 				endcase
+			end
 		endcase
 	end
 
@@ -188,7 +186,7 @@ module Project(
 	 * ----------------------------- ALU ----------------------------- 
 	 */
 	 
-	// Connect to decode stage with wires if they are in the same stage
+	// Create pipeline buffer for stage A
 	wire aluimm_A = aluimm_D,
 		isbranch_A = isbranch_D,
 		isjump_A = isjump_D,
@@ -199,24 +197,18 @@ module Project(
 		selpcplus_A = selpcplus_D,
 		wrreg_A = wrreg_D;
 		
-	wire [(OP1BITS - 1) : 0] op1_A = op1_D;
-	wire [(OP2BITS - 1) : 0] op2_A = op2_D;
+	wire [(OP2BITS - 1) : 0] alufunc_A = alufunc_D;
 	wire [(REGNOBITS - 1) : 0] wregno_A = wregno_D;
 	wire [(DBITS - 1) : 0] pcplus_A, regval1_A, regval2_A, sxtimm_A, pcpred_A;
 	assign {pcplus_A, regval1_A, regval2_A, sxtimm_A, pcpred_A} = {pcplus_D, regval1_D, regval2_D, sxtimm_D, pcpred_D};
 	
-	// Create ALU registers
-	reg [(OP1BITS - 1) : 0] alufunc_A;
-	reg [(DBITS - 1) : 0] aluin1_A, aluin2_A;
-	
-	always @(posedge clk) begin
-		alufunc_A <= aluimm_A ? op1_A : op2_A;
-		aluin1_A <= regval1_A;
-		aluin2_A <= aluimm_A ? sxtimm_A : regval2_A;
-	end
-	
 	// Create ALU
-	always @(alufunc_A or aluin1_A or aluin2_A)
+	wire signed [(DBITS - 1) : 0] aluin1_A, aluin2_A;
+	reg [(DBITS - 1) : 0] aluout_A;
+	assign aluin1_A = regval1_A;
+	assign aluin2_A = aluimm_A ? sxtimm_A : regval2_A;
+	
+	always @(alufunc_A or aluin1_A or aluin2_A) begin
 		case(alufunc_A)
 			OP2_EQ : aluout_A = {31'b0, aluin1_A == aluin2_A};
 			OP2_LT : aluout_A = {31'b0, aluin1_A < aluin2_A};
@@ -232,6 +224,7 @@ module Project(
 			OP2_NXOR : aluout_A = ~(aluin1_A ^ aluin2_A);
 			default : aluout_A = {DBITS{1'bX}};
 		endcase
+	end
 
 	// Generate branch and jump signals
 	wire dobranch_A = isbranch_A && aluout_A[0] == 1;
@@ -248,7 +241,7 @@ module Project(
 	// Branch prediction
 	
 	reg [(DBITS - 1) : 0] pcpred_A;
-	reg [(DBITS - 1) : 0] branchpred_A[(REGWORDS - 1) : 0]
+	reg [(DBITS - 1) : 0] branchpred_A[(2 << BRANCHPREDBITS) : 0]
 	wire [(BRANCHPREDBITS - 1) : 0] predidx_A = pcplus_A[(BRANCHPREDBITS + 2 - 1) : 2];
 	
 	always @(posedge clk) begin
@@ -271,18 +264,18 @@ module Project(
 	 
 	// Create pipeline buffer for M stage
 	reg wrmem_M, selaluout_M, selmemout_M, selpcplus_M, wrreg_M;
-	reg [(DBITS - 1) : 0] aluout_M, pcplus_M, regval1_M, regval2_M;
-	wire [(REGNOBITS - 1) : 0] wregno_M;
+	reg [(DBITS - 1) : 0] aluout_M, pcplus_M, regval1_M;
+	reg [(REGNOBITS - 1) : 0] wregno_M;
 	
 	always @(posedge clk) begin
 		{wrmem_M, selaluout_M, selmemout_M, selpcplus_M, wrreg_M} <= {wrmem_A, selaluout_A, selmemout_A, selpcplus_A, wrreg_A};
-		{aluout_M, pcplus_M, regval1_M, regval2_M} <= {aluout_A, pcplus_A, regval1_A, regval2_A};
+		{aluout_M, pcplus_M, regval1_M} <= {aluout_A, pcplus_A, regval1_A};
 		wregno_M <= wregno_A;
 	end
 	
 	// Handle data hazards
 	reg stall_F, stalled;
-	wire hazard = !stalled && wrreg_M && ((wregno_M == rs_D) || (wregno_M == rt_D));
+	wire hazard = !stalled & wrreg_M & ((wregno_M == rs_D) | ((wregno_M == rt_D) & ~aluimm_D));
 	
 	always @(posedge clk) begin
 		stalled <= 0;
@@ -294,7 +287,7 @@ module Project(
 	end
 		
 	// Create memory signals
-	wire [(DBITS - 1)] memaddr_M, wmemval_M;
+	wire [(DBITS - 1) : 0] memaddr_M, wmemval_M;
 	assign {memaddr_M, wmemval_M} = {aluout_M, regval1_M};
 	
 	// Create and connect HEX register
@@ -312,20 +305,21 @@ module Project(
 		else if(wrmem_M && (memaddr_M == ADDRHEX))
 			HexOut <= wmemval_M[23 : 0];
 
-	// Create and connect LEDR register
-	reg [9 : 0] LEDROut;
+	// Create and connect LEDR register	
+	reg [9: 0] LEDRout;
+	assign LEDR = LEDRout;
 	
 	always @(posedge clk or posedge reset)
 		if(reset)
-			LEDROut <= 10'd0;
+			LEDRout <= 10'd0;
 		else if(wrmem_M && (memaddr_M == ADDRLEDR))
-			LEDROut <= wmemval_M[9 : 0];
+			LEDRout <= wmemval_M[9 : 0];
 	
 	// Now the real data memory
 	wire MemEnable = !(memaddr_M[(DBITS - 1) : DMEMADDRBITS]);
 	wire MemWE = (!reset) & wrmem_M & MemEnable;
 	
-	( * ram_init_file = IMEMINITFILE, ramstyle = "no_rw_check" * )
+	(* ram_init_file = IMEMINITFILE, ramstyle = "no_rw_check" *)
 	reg [(DBITS - 1) : 0] dmem[(DMEMWORDS - 1) : 0];
 	
 	always @(posedge clk)
@@ -342,9 +336,9 @@ module Project(
 
 	// Decide what gets written into the destination register (wregval_M),
 	// when it gets written (wrreg_M) and to which register it gets written (wregno_M)
-	wire wregval_M = selpcplus_M ? pcplus_M : (
+	wire [(DBITS - 1) : 0] wregval_M = selpcplus_M ? pcplus_M : (
 		selaluout_M ? aluout_M : (
-			selmemout_M ? memout_m : {(REGNOBITS){1'bX}}
+			selmemout_M ? memout_M : {(DBITS){1'bX}}
 		)
 	);
 
