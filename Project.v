@@ -31,6 +31,8 @@ module Project(
 	parameter DMEMWORDBITS = 2;
 	parameter DMEMWORDS = (1 << (DMEMADDRBITS - DMEMWORDBITS));
 	parameter BRANCHPREDBITS = 4;
+	parameter NUMSTAGES = 2;
+	parameter STAGEBITS = 1;
 	
 	parameter OP1BITS = 6;
 	parameter OP1_ALUR = 6'b000000;
@@ -148,37 +150,25 @@ module Project(
 				// ALUR ops
 				{aluimm_D, alufunc_D, selaluout_D, selmemout_D, selpcplus_D, wregno_D, wrreg_D} =
 				{1'b0, op2_D, 1'b1, 1'b0, 1'b0, rd_D, 1'b1};
-			default: begin
-				// ALUI ops
-				{aluimm_D, alufunc_D} = {1'b1, op1_D};
-				
+			default:
 				case (op1_D)
-					// Ops that don't write to a register
 					OP1_BEQ, OP1_BNE, OP1_BLT, OP1_BLE:
-						{isbranch_D, selaluout_D, selmemout_D, selpcplus_D} =
-						{1'b1, 1'b1, 1'b0, 1'b0};
+						{aluimm_D, alufunc_D, isbranch_D, selaluout_D, selmemout_D, selpcplus_D} =
+						{1'b0, op1_D, 1'b1, 1'b1, 1'b0, 1'b0};
 					OP1_SW:
-						{wrmem_D, selaluout_D, selmemout_D, selpcplus_D} =
-						{1'b1, 1'b0, 1'b0, 1'b0};
-					default: begin
-						// Ops that write to rt
-						{wrreg_D, wregno_D} = {1'b1, rt_D};
-						
-						case (op1_D)
-							OP1_JAL:
-								{isjump_D, selaluout_D, selmemout_D, selpcplus_D} =
-								{1'b1, 1'b0, 1'b0, 1'b1};
-							OP1_LW:
-								{selaluout_D, selmemout_D, selpcplus_D} =
-								{1'b0, 1'b1, 1'b0};
-							OP1_ADDI, OP1_ANDI, OP1_ORI, OP1_XORI:
-								{selaluout_D, selmemout_D, selpcplus_D} =
-								{1'b1, 1'b0, 1'b0};
-							default:  isnop_D = 1'b1;
-						endcase
-					end
+						{aluimm_D, alufunc_D, wrmem_D, selaluout_D, selmemout_D, selpcplus_D} =
+						{1'b1, OP1_ADDI, 1'b1, 1'b0, 1'b0, 1'b0};
+					OP1_JAL:
+						{aluimm_D, alufunc_D, wrreg_D, wregno_D, isjump_D, selaluout_D, selmemout_D, selpcplus_D} =
+						{1'b1, OP1_ADDI, 1'b1, rt_D, 1'b1, 1'b0, 1'b0, 1'b1};
+					OP1_LW:
+						{aluimm_D, alufunc_D, wrreg_D, wregno_D, selaluout_D, selmemout_D, selpcplus_D} =
+						{1'b1, OP1_ADDI, 1'b1, rt_D, 1'b0, 1'b1, 1'b0};
+					OP1_ADDI, OP1_ANDI, OP1_ORI, OP1_XORI:
+						{aluimm_D, alufunc_D, wrreg_D, wregno_D, selaluout_D, selmemout_D, selpcplus_D} =
+						{1'b1, op1_D, 1'b1, rt_D, 1'b1, 1'b0, 1'b0};
+					default:  isnop_D = 1'b1;
 				endcase
-			end
 		endcase
 	end
 
@@ -227,9 +217,10 @@ module Project(
 	end
 
 	// Generate branch and jump signals
-	wire dobranch_A = isbranch_A && aluout_A[0] == 1;
-	wire [(DBITS - 1) : 0] brtarg_A = sxtimm_A + pcplus_A;
-	wire [(DBITS - 1) : 0] jmptarg_A = (sxtimm_A << 2) + regval1_A;
+	wire dobranch_A = isbranch_A & aluout_A[0];
+	wire [(DBITS - 1) : 0] immx4_A = sxtimm_A << 2;
+	wire [(DBITS - 1) : 0] brtarg_A = immx4_A + pcplus_A;
+	wire [(DBITS - 1) : 0] jmptarg_A = immx4_A + regval1_A;
 	
 	// Decide what to do based off of signals and branch prediction
 	wire [(DBITS - 1) : 0] pcgood_A = dobranch_A ? brtarg_A : (isjump_A ? jmptarg_A : pcplus_A);
@@ -237,6 +228,10 @@ module Project(
 	wire mispred_B = mispred_A && !isnop_A;
 	wire [(DBITS - 1) : 0] pcgood_B = pcgood_A;
 	
+	// Temporarily disable stalls and flushes
+	wire stall_F = 1'b0;
+	wire flush_D = 1'b0;
+
 	/*
 	// Branch prediction
 	
@@ -251,12 +246,35 @@ module Project(
 			branchpred_A[predidx_A] <= pcgood_B;
 	end
 	*/
-
+	
+	/*
+	// Handle data hazards
+	reg stall_F;
+	reg [(STAGEBITS - 1) : 0] stalled;
+	wire isstalled = stalled != {STAGEBITS{1'b0}};
+	wire hazard = !isnop_A & wrreg_A & ((wregno_A == rs_D) | ((wregno_A == rt_D) & ~aluimm_D));
+	
+	always @(posedge clk) begin
+		if (reset)
+			stalled = {STAGEBITS{1'b0}};
+		else if hazard // produce # stages - 1 nops on stall
+			stalled = (NUMSTAGES - 1);
+		else if isstalled // decrement stall counter if stalled
+			stalled = stalled - {{(STAGEBITS - 1){1'b0}}, 1'b1};
+		
+		stall_F = isstalled;
+	end
+	*/
+	
+	/*
 	// Generate the flush signals
 	reg flush_D;
+	wire isstalled = 1'b0;
+	wire stall_F = 1'b0;
 	
-	always @(posedge clk)
-		flush_D <= !reset && (mispred_B || isjump_A);
+	always @(mispred_B or isjump_A or isstalled)
+		flush_D <= mispred_B | isjump_A | isstalled;
+	*/
 
 	/*
 	 * ----------------------------- MEM ----------------------------- 
@@ -271,19 +289,6 @@ module Project(
 		{wrmem_M, selaluout_M, selmemout_M, selpcplus_M, wrreg_M} <= {wrmem_A, selaluout_A, selmemout_A, selpcplus_A, wrreg_A};
 		{aluout_M, pcplus_M, regval1_M} <= {aluout_A, pcplus_A, regval1_A};
 		wregno_M <= wregno_A;
-	end
-	
-	// Handle data hazards
-	reg stall_F, stalled;
-	wire hazard = !stalled & wrreg_M & ((wregno_M == rs_D) | ((wregno_M == rt_D) & ~aluimm_D));
-	
-	always @(posedge clk) begin
-		stalled <= 0;
-		
-		if (!reset) begin
-			stall_F <= hazard;
-			stalled <= 1;
-		end
 	end
 		
 	// Create memory signals
@@ -305,7 +310,7 @@ module Project(
 		else if(wrmem_M && (memaddr_M == ADDRHEX))
 			HexOut <= wmemval_M[23 : 0];
 
-	// Create and connect LEDR register	
+	// Create and connect LEDR register
 	reg [9: 0] LEDRout;
 	assign LEDR = LEDRout;
 	
