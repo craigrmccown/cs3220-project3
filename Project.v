@@ -11,7 +11,6 @@ module Project(
 	output [6 : 0] HEX5,
 	output [9 : 0] LEDR
 );
-
 	parameter DBITS = 32;
 	parameter INSTSIZE = 32'd4;
 	parameter INSTBITS = 32;
@@ -62,6 +61,7 @@ module Project(
 	parameter OP2_NOR = OP2_OR | 6'b001000;
 	parameter OP2_NXOR = OP2_XOR | 6'b001000;
 	
+	/*
 	// The reset signal comes from the reset button on the DE0 - CV board
 	// RESET_N is active - low, so we flip its value ("reset" is active - high)
 	wire clk, locked;
@@ -75,6 +75,16 @@ module Project(
 	);
 	
 	wire reset = !locked;
+	*/
+	
+	wire clk = KEY[0];
+	reg reset;
+	
+	initial reset <= 1'b1;
+	
+	always @(posedge clk)
+		if (reset)
+			reset <= 1'b0;
 
 	// The PC register and update logic
 	reg [(DBITS - 1) : 0] PC;
@@ -82,9 +92,11 @@ module Project(
 	always @(posedge clk) begin
 		if (reset)
 			PC <= STARTPC;
+		else if (stall_F)
+			PC <= PC;
 		else if (mispred_B)
 			PC <= pcgood_B;
-		else if (!stall_F)
+		else
 			PC <= pcpred_F;
 	end
 		
@@ -153,11 +165,9 @@ module Project(
 			default:
 				case (op1_D)
 					OP1_BEQ, OP1_BNE, OP1_BLT, OP1_BLE:
-						{aluimm_D, alufunc_D, isbranch_D, selaluout_D, selmemout_D, selpcplus_D} =
-						{1'b0, op1_D, 1'b1, 1'b1, 1'b0, 1'b0};
+						{aluimm_D, alufunc_D, isbranch_D} = {1'b0, op1_D, 1'b1};
 					OP1_SW:
-						{aluimm_D, alufunc_D, wrmem_D, selaluout_D, selmemout_D, selpcplus_D} =
-						{1'b1, OP1_ADDI, 1'b1, 1'b0, 1'b0, 1'b0};
+						{aluimm_D, alufunc_D, wrmem_D} = {1'b1, OP1_ADDI, 1'b1};
 					OP1_JAL:
 						{aluimm_D, alufunc_D, wrreg_D, wregno_D, isjump_D, selaluout_D, selmemout_D, selpcplus_D} =
 						{1'b1, OP1_ADDI, 1'b1, rt_D, 1'b1, 1'b0, 1'b0, 1'b1};
@@ -229,7 +239,6 @@ module Project(
 	wire [(DBITS - 1) : 0] pcgood_B = pcgood_A;
 	
 	// Temporarily disable stalls and flushes
-	wire stall_F = 1'b0;
 	wire flush_D = 1'b0;
 
 	/*
@@ -248,32 +257,8 @@ module Project(
 	*/
 	
 	/*
-	// Handle data hazards
-	reg stall_F;
-	reg [(STAGEBITS - 1) : 0] stalled;
-	wire isstalled = stalled != {STAGEBITS{1'b0}};
-	wire hazard = !isnop_A & wrreg_A & ((wregno_A == rs_D) | ((wregno_A == rt_D) & ~aluimm_D));
-	
-	always @(posedge clk) begin
-		if (reset)
-			stalled = {STAGEBITS{1'b0}};
-		else if hazard // produce # stages - 1 nops on stall
-			stalled = (NUMSTAGES - 1);
-		else if isstalled // decrement stall counter if stalled
-			stalled = stalled - {{(STAGEBITS - 1){1'b0}}, 1'b1};
-		
-		stall_F = isstalled;
-	end
-	*/
-	
-	/*
 	// Generate the flush signals
-	reg flush_D;
-	wire isstalled = 1'b0;
-	wire stall_F = 1'b0;
-	
-	always @(mispred_B or isjump_A or isstalled)
-		flush_D <= mispred_B | isjump_A | isstalled;
+		No need to flush with only 2 stages
 	*/
 
 	/*
@@ -281,15 +266,44 @@ module Project(
 	 */
 	 
 	// Create pipeline buffer for M stage
-	reg wrmem_M, selaluout_M, selmemout_M, selpcplus_M, wrreg_M;
+	reg isnop_M, wrmem_M, selaluout_M, selmemout_M, selpcplus_M, wrreg_M;
 	reg [(DBITS - 1) : 0] aluout_M, pcplus_M, regval1_M;
 	reg [(REGNOBITS - 1) : 0] wregno_M;
 	
 	always @(posedge clk) begin
-		{wrmem_M, selaluout_M, selmemout_M, selpcplus_M, wrreg_M} <= {wrmem_A, selaluout_A, selmemout_A, selpcplus_A, wrreg_A};
+		{isnop_M, wrmem_M, selaluout_M, selmemout_M, selpcplus_M, wrreg_M} <= {isnop_A, wrmem_A, selaluout_A, selmemout_A, selpcplus_A, wrreg_A};
 		{aluout_M, pcplus_M, regval1_M} <= {aluout_A, pcplus_A, regval1_A};
 		wregno_M <= wregno_A;
 	end
+	
+	// Handle data hazards (for 2 cycle)
+	reg stalled;
+	wire stall_F = !isnop_M & !stalled & wrreg_M & ((wregno_M == rs_D) | ((wregno_M == rt_D) & ~aluimm_D));
+	
+	always @(posedge clk)
+		if (reset)
+			stalled <= 1'b0;
+		else
+			stalled <= stall_F;
+	
+	/*
+	// Handle data hazards
+	reg stall_F;
+	reg [(STAGEBITS - 1) : 0] stalled;
+	wire isstalled = stalled != {STAGEBITS{1'b0}};
+	wire hazard = !isnop_M & wrreg_M & ((wregno_M == rs_D) | ((wregno_M == rt_D) & ~aluimm_D));
+	
+	always @(posedge clk) begin
+		if (reset)
+			stalled = {STAGEBITS{1'b0}};
+		else if (hazard) // produce # stages - 1 nops on stall
+			stalled = (NUMSTAGES - 1);
+		else if (isstalled) // decrement stall counter if stalled
+			stalled = stalled - {{(STAGEBITS - 1){1'b0}}, 1'b1};
+		
+		stall_F = isstalled;
+	end
+	*/
 		
 	// Create memory signals
 	wire [(DBITS - 1) : 0] memaddr_M, wmemval_M;
@@ -307,8 +321,12 @@ module Project(
 	always @(posedge clk or posedge reset)
 		if(reset)
 			HexOut <= 24'hFEDEAD;
+		/*
 		else if(wrmem_M && (memaddr_M == ADDRHEX))
 			HexOut <= wmemval_M[23 : 0];
+		*/
+		else
+			HexOut <= {PC[11 : 0], wmemval_M[11 : 0]};
 
 	// Create and connect LEDR register
 	reg [9: 0] LEDRout;
