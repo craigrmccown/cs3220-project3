@@ -293,7 +293,7 @@ module Project(
 	
 	// Handle data hazards (for 2 cycle)
 	reg stalled;
-	wire stall_F = !isnop_M & !stalled & wrreg_M & ((wregno_M == rs_D) | ((wregno_M == rt_D) & ~aluimm_D));
+	wire stall_F = !isnop_M & !stalled & wrreg_M & ((wregno_M == rs_D) | ((wregno_M == rt_D) & (~aluimm_D | wrmem_D)));
 	
 	always @(posedge clk)
 		if (reset)
