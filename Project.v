@@ -61,30 +61,45 @@ module Project(
 	parameter OP2_NOR = OP2_OR | 6'b001000;
 	parameter OP2_NXOR = OP2_XOR | 6'b001000;
 	
-	/*
 	// The reset signal comes from the reset button on the DE0 - CV board
 	// RESET_N is active - low, so we flip its value ("reset" is active - high)
-	wire clk, locked;
+	wire _clk, locked;
 	
 	// The PLL is wired to produce clk and locked signals for our logic
 	Pll myPll(
 		.refclk (CLOCK_50),
 		.rst (!RESET_N),
-		.outclk_0 (clk),
+		.outclk_0 (_clk),
 		.locked (locked)
 	);
 	
-	wire reset = !locked;
-	*/
+	// wire reset = !locked;
 	
-	wire clk = KEY[0];
+	reg clk;
 	reg reset;
+	reg hasticked;
+	reg [31 : 0] clk_cnt;
 	
-	initial reset <= 1'b1;
+	initial begin
+		reset <= 1'b1;
+		hasticked <= 1'b0;
+		clk_cnt <= 32'b0;
+		clk <= 1'b0;
+	end
 	
-	always @(posedge clk)
-		if (reset)
-			reset <= 1'b0;
+	always @(posedge _clk) begin
+		if (clk_cnt == 32'd25000000) begin
+			clk_cnt <= 32'b0;
+			clk <= 1'b1;
+			hasticked <= 1'b1;
+		end else begin
+			if (hasticked)
+				reset <= 1'b0;
+
+			clk_cnt <= clk_cnt + 1;
+			clk <= 1'b0;
+		end
+	end
 
 	// The PC register and update logic
 	reg [(DBITS - 1) : 0] PC;
@@ -267,12 +282,12 @@ module Project(
 	 
 	// Create pipeline buffer for M stage
 	reg isnop_M, wrmem_M, selaluout_M, selmemout_M, selpcplus_M, wrreg_M;
-	reg [(DBITS - 1) : 0] aluout_M, pcplus_M, regval1_M;
+	reg [(DBITS - 1) : 0] aluout_M, pcplus_M, regval2_M;
 	reg [(REGNOBITS - 1) : 0] wregno_M;
 	
 	always @(posedge clk) begin
 		{isnop_M, wrmem_M, selaluout_M, selmemout_M, selpcplus_M, wrreg_M} <= {isnop_A, wrmem_A, selaluout_A, selmemout_A, selpcplus_A, wrreg_A};
-		{aluout_M, pcplus_M, regval1_M} <= {aluout_A, pcplus_A, regval1_A};
+		{aluout_M, pcplus_M, regval2_M} <= {aluout_A, pcplus_A, regval2_A};
 		wregno_M <= wregno_A;
 	end
 	
@@ -307,7 +322,7 @@ module Project(
 		
 	// Create memory signals
 	wire [(DBITS - 1) : 0] memaddr_M, wmemval_M;
-	assign {memaddr_M, wmemval_M} = {aluout_M, regval1_M};
+	assign {memaddr_M, wmemval_M} = {aluout_M, regval2_M};
 	
 	// Create and connect HEX register
 	reg [23 : 0] HexOut;
@@ -326,7 +341,7 @@ module Project(
 			HexOut <= wmemval_M[23 : 0];
 		*/
 		else
-			HexOut <= {PC[11 : 0], wmemval_M[11 : 0]};
+			HexOut <= PC[23 : 0];
 
 	// Create and connect LEDR register
 	reg [9: 0] LEDRout;
