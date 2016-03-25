@@ -76,10 +76,20 @@ def finish_alur(insts, lines):
         f.write('\n'.join(alurs))
 
 
+def step3_to_hex():
+    hex_vals = []
+
+    with open('step3.txt', 'r') as f:
+        for line in f.readlines():
+            line = line.strip()
+            hex_vals.append("%08X" % int(line, 2))
+
+    with open('step4.txt', 'w') as f:
+        f.write('\n'.join(hex_vals))
+
+
 def main():
-    insts, lines = get_insts()
-    write_first6(insts)
-    finish_alur(insts, lines)
+    step3_to_hex()
 
 
 if __name__ == '__main__':
