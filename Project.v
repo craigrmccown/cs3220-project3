@@ -88,7 +88,7 @@ module Project(
 	end
 	
 	always @(posedge _clk) begin
-		if (clk_cnt == 32'd25000000) begin
+		if (clk_cnt == 32'd60000000) begin
 			clk_cnt <= 32'b0;
 			clk <= 1'b1;
 			hasticked <= 1'b1;
@@ -103,6 +103,7 @@ module Project(
 
 	// The PC register and update logic
 	reg [(DBITS - 1) : 0] PC;
+	wire stall_F = 1'b0;
 	
 	always @(posedge clk) begin
 		if (reset)
@@ -154,10 +155,12 @@ module Project(
 	// Register - read
 	reg [(DBITS - 1) : 0] regs[(REGWORDS - 1) : 0];
 	
-	// Two read ports, always using rs and rt for register numbers
+	/*
+	// Two read ports
 	wire [(REGNOBITS - 1) : 0] rregno1_D = rs_D, rregno2_D = rt_D;
 	wire [(DBITS - 1) : 0] regval1_D = regs[rregno1_D];
 	wire [(DBITS - 1) : 0] regval2_D = regs[rregno2_D];
+	*/
 	
 	// Create decode registers
 	reg aluimm_D, isbranch_D, isjump_D, isnop_D, wrmem_D, selaluout_D, selmemout_D, selpcplus_D, wrreg_D;
@@ -196,26 +199,45 @@ module Project(
 				endcase
 		endcase
 	end
+	
+	// Hazard detection
+	wire hazard_s_A = wrreg_A & wregno_A == rs_D;
+	wire hazard_t_A = wrreg_A & ~aluimm_D & wregno_A == rt_D;
+	wire hazard_s_M = wrreg_M & wregno_M == rs_D;
+	wire hazard_t_M = wrreg_M & ~aluimm_D & wregno_M == rt_D;
+	
+	// Data forwarding
+	wire [(DBITS - 1) : 0] forwarded_A = selaluout_A ? aluout_A : (selpcplus_A ? pcplus_A : {DBITS{1'bX}});
+	wire [(DBITS - 1) : 0] forwarded_M = selaluout_M ? aluout_M : (selpcplus_M ? pcplus_M : {DBITS{1'bX}});
+	wire [(DBITS - 1) : 0] regval1_D = hazard_s_A ? forwarded_A : (hazard_s_M ? forwarded_M : regs[rs_D]);
+	wire [(DBITS - 1) : 0] regval2_D = hazard_t_A ? forwarded_A : (hazard_t_M ? forwarded_M : regs[rt_D]);
 
 	/*
 	 * ----------------------------- ALU ----------------------------- 
 	 */
-	 
+
 	// Create pipeline buffer for stage A
-	wire aluimm_A = aluimm_D,
-		isbranch_A = isbranch_D,
-		isjump_A = isjump_D,
-		isnop_A = isnop_D,
-		wrmem_A = wrmem_D,
-		selaluout_A = selaluout_D,
-		selmemout_A = selmemout_D,
-		selpcplus_A = selpcplus_D,
-		wrreg_A = wrreg_D;
+	reg aluimm_A,
+		isbranch_A,
+		isjump_A,
+		isnop_A,
+		wrmem_A,
+		selaluout_A,
+		selmemout_A,
+		selpcplus_A,
+		wrreg_A;
 		
-	wire [(OP2BITS - 1) : 0] alufunc_A = alufunc_D;
-	wire [(REGNOBITS - 1) : 0] wregno_A = wregno_D;
-	wire [(DBITS - 1) : 0] pcplus_A, regval1_A, regval2_A, sxtimm_A, pcpred_A;
-	assign {pcplus_A, regval1_A, regval2_A, sxtimm_A, pcpred_A} = {pcplus_D, regval1_D, regval2_D, sxtimm_D, pcpred_D};
+	reg [(OP2BITS - 1) : 0] alufunc_A;
+	reg [(REGNOBITS - 1) : 0] wregno_A;
+	reg [(DBITS - 1) : 0] pcplus_A, sxtimm_A, pcpred_A, regval1_A, regval2_A;
+	
+	always @(posedge clk) begin
+		{aluimm_A, isbranch_A, isjump_A, isnop_A, wrmem_A, selaluout_A, selmemout_A, selpcplus_A, wrreg_A} <=
+		{aluimm_D, isbranch_D, isjump_D, isnop_D, wrmem_D, selaluout_D, selmemout_D, selpcplus_D, wrreg_D};
+		alufunc_A <= alufunc_D;
+		wregno_A <= wregno_D;
+		{pcplus_A, sxtimm_A, pcpred_A, regval1_A, regval2_A} <= {pcplus_D, sxtimm_D, pcpred_D, regval1_D, regval2_D};
+	end
 	
 	// Create ALU
 	wire signed [(DBITS - 1) : 0] aluin1_A, aluin2_A;
@@ -253,8 +275,8 @@ module Project(
 	wire mispred_B = mispred_A && !isnop_A;
 	wire [(DBITS - 1) : 0] pcgood_B = pcgood_A;
 	
-	// Temporarily disable stalls and flushes
-	wire flush_D = 1'b0;
+	// Generate the flush signals
+	wire flush_D = !isnop_A & mispred_B;
 
 	/*
 	// Branch prediction
@@ -270,55 +292,21 @@ module Project(
 			branchpred_A[predidx_A] <= pcgood_B;
 	end
 	*/
-	
-	/*
-	// Generate the flush signals
-		No need to flush with only 2 stages
-	*/
 
 	/*
 	 * ----------------------------- MEM ----------------------------- 
 	 */
 	 
 	// Create pipeline buffer for M stage
-	reg isnop_M, wrmem_M, selaluout_M, selmemout_M, selpcplus_M, wrreg_M;
+	reg wrmem_M, selaluout_M, selmemout_M, selpcplus_M, wrreg_M;
 	reg [(DBITS - 1) : 0] aluout_M, pcplus_M, regval2_M;
 	reg [(REGNOBITS - 1) : 0] wregno_M;
 	
 	always @(posedge clk) begin
-		{isnop_M, wrmem_M, selaluout_M, selmemout_M, selpcplus_M, wrreg_M} <= {isnop_A, wrmem_A, selaluout_A, selmemout_A, selpcplus_A, wrreg_A};
+		{wrmem_M, selaluout_M, selmemout_M, selpcplus_M, wrreg_M} <= {wrmem_A, selaluout_A, selmemout_A, selpcplus_A, wrreg_A};
 		{aluout_M, pcplus_M, regval2_M} <= {aluout_A, pcplus_A, regval2_A};
 		wregno_M <= wregno_A;
 	end
-	
-	// Handle data hazards (for 2 cycle)
-	reg stalled;
-	wire stall_F = !isnop_M & !stalled & wrreg_M & ((wregno_M == rs_D) | ((wregno_M == rt_D) & (~aluimm_D | wrmem_D)));
-	
-	always @(posedge clk)
-		if (reset)
-			stalled <= 1'b0;
-		else
-			stalled <= stall_F;
-	
-	/*
-	// Handle data hazards
-	reg stall_F;
-	reg [(STAGEBITS - 1) : 0] stalled;
-	wire isstalled = stalled != {STAGEBITS{1'b0}};
-	wire hazard = !isnop_M & wrreg_M & ((wregno_M == rs_D) | ((wregno_M == rt_D) & ~aluimm_D));
-	
-	always @(posedge clk) begin
-		if (reset)
-			stalled = {STAGEBITS{1'b0}};
-		else if (hazard) // produce # stages - 1 nops on stall
-			stalled = (NUMSTAGES - 1);
-		else if (isstalled) // decrement stall counter if stalled
-			stalled = stalled - {{(STAGEBITS - 1){1'b0}}, 1'b1};
-		
-		stall_F = isstalled;
-	end
-	*/
 		
 	// Create memory signals
 	wire [(DBITS - 1) : 0] memaddr_M, wmemval_M;
@@ -336,10 +324,9 @@ module Project(
 	always @(posedge clk or posedge reset)
 		if(reset)
 			HexOut <= 24'hFEDEAD;
-		/*
+			/*
 		else if(wrmem_M && (memaddr_M == ADDRHEX))
-			HexOut <= wmemval_M[23 : 0];
-		*/
+			HexOut <= wmemval_M[23 : 0];*/
 		else
 			HexOut <= PC[23 : 0];
 
