@@ -229,14 +229,18 @@ module Project(
 	wire [(DBITS - 1) : 0] immx4_D = sxtimm_D << 2;
 	wire [(DBITS - 1) : 0] brtarg_D = immx4_D + pcplus_D;
 	wire [(DBITS - 1) : 0] jmptarg_D = immx4_D + regval1_D;
+	
+	// Calculate ALU inputs
+	wire signed [(DBITS - 1) : 0] aluin1_D = regval1_D;
+	wire signed [(DBITS - 1) : 0] aluin2_D = aluimm_D ? sxtimm_D : regval2_D;
+	wire [(DBITS - 1) : 0] sub_out_D = aluin1_D - aluin2_D;
 
 	/*
 	 * ----------------------------- ALU ----------------------------- 
 	 */
 
 	// Create pipeline buffer for stage A
-	reg aluimm_A,
-		isbranch_A,
+	reg isbranch_A,
 		isjump_A,
 		isnop_A,
 		wrmem_A,
@@ -247,43 +251,39 @@ module Project(
 		
 	reg [(OP2BITS - 1) : 0] alufunc_A;
 	reg [(REGNOBITS - 1) : 0] wregno_A;
-	reg [(DBITS - 1) : 0] pcplus_A, sxtimm_A, pcpred_A, regval1_A, regval2_A, brtarg_A, jmptarg_A;
+	reg [(DBITS - 1) : 0] pcplus_A, pcpred_A, regval2_A, brtarg_A, jmptarg_A, aluin1_A, aluin2_A, sub_out_A;
 	
 	always @(posedge clk) begin
 		if (!stall_D) begin
-			{aluimm_A, isbranch_A, isjump_A, isnop_A, wrmem_A, selaluout_A, selmemout_A, selpcplus_A, wrreg_A} <=
-			{aluimm_D, isbranch_D, isjump_D, isnop_D, wrmem_D, selaluout_D, selmemout_D, selpcplus_D, wrreg_D};
+			{isbranch_A, isjump_A, isnop_A, wrmem_A, selaluout_A, selmemout_A, selpcplus_A, wrreg_A} <=
+			{isbranch_D, isjump_D, isnop_D, wrmem_D, selaluout_D, selmemout_D, selpcplus_D, wrreg_D};
 			alufunc_A <= alufunc_D;
 			wregno_A <= wregno_D;
-			{pcplus_A, sxtimm_A, pcpred_A, regval1_A, regval2_A, brtarg_A, jmptarg_A} <=
-			{pcplus_D, sxtimm_D, pcpred_D, regval1_D, regval2_D, brtarg_D, jmptarg_D};
+			{pcplus_A, pcpred_A, regval2_A, brtarg_A, jmptarg_A, aluin1_A, aluin2_A, sub_out_A} <=
+			{pcplus_D, pcpred_D, regval2_D, brtarg_D, jmptarg_D, aluin1_D, aluin2_D, sub_out_D};
 		end else begin
-			{aluimm_A, isbranch_A, isjump_A, isnop_A, wrmem_A, selaluout_A, selmemout_A, selpcplus_A, wrreg_A} <=
-			{1'bX, 1'b0, 1'b0, 1'b1, 1'b0, 1'bX, 1'bX, 1'bX, 1'b0};
+			{isbranch_A, isjump_A, isnop_A, wrmem_A, selaluout_A, selmemout_A, selpcplus_A, wrreg_A} <=
+			{1'b0, 1'b0, 1'b1, 1'b0, 1'bX, 1'bX, 1'bX, 1'b0};
 			alufunc_A <= {OP2BITS{1'bX}};
 			wregno_A <= {REGNOBITS{1'bX}};
-			{pcplus_A, sxtimm_A, pcpred_A, regval1_A, regval2_A, brtarg_A, jmptarg_A} <= {(DBITS * 7){1'bX}};
+			{pcplus_A, pcpred_A, regval2_A, brtarg_A, jmptarg_A, aluin1_A, aluin2_A, sub_out_A} <= {(DBITS * 8){1'bX}};
 		end
 	end
 	
 	// Create ALU
-	wire signed [(DBITS - 1) : 0] aluin1_A, aluin2_A;
 	reg [(DBITS - 1) : 0] aluout_A;
-	assign aluin1_A = regval1_A;
-	assign aluin2_A = aluimm_A ? sxtimm_A : regval2_A;
 	
 	wire iscomparison = ~alufunc_A[5];
 	wire [1 : 0] comparisonfunc = alufunc_A[1 : 0];
 	wire isbasecalc = ~alufunc_A[3];
 	wire [2 : 0] calcfunc = alufunc_A[2 : 0];
 	
-	wire eq_out = aluin1_A == aluin2_A;
-	wire lt_out = aluin1_A < aluin2_A;
 	wire[(DBITS - 1) : 0] add_out = aluin1_A + aluin2_A;
-	wire[(DBITS - 1) : 0] sub_out = aluin1_A - aluin2_A;
 	wire[(DBITS - 1) : 0] and_out = aluin1_A & aluin2_A;
 	wire[(DBITS - 1) : 0] or_out = aluin1_A | aluin2_A;
 	wire[(DBITS - 1) : 0] xor_out = aluin1_A ^ aluin2_A;
+	wire eq_out = aluin1_A == aluin2_A;
+	wire lt_out = sub_out_A[(DBITS - 1)];
 	
 	always @ * begin
 		if (iscomparison) begin
@@ -305,7 +305,7 @@ module Project(
 				endcase
 			end else begin
 				case (calcfunc)
-					FUNCSEL_ADD: aluout_A = sub_out;
+					FUNCSEL_ADD: aluout_A = sub_out_A;
 					FUNCSEL_AND: aluout_A = ~and_out;
 					FUNCSEL_OR: aluout_A = ~or_out;
 					FUNCSEL_XOR: aluout_A = ~xor_out;
