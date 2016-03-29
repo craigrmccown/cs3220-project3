@@ -59,6 +59,15 @@ module Project(
 	parameter OP2_NOR = OP2_OR | 6'b001000;
 	parameter OP2_NXOR = OP2_XOR | 6'b001000;
 	
+	parameter FUNCSEL_EQ = 2'b00;
+	parameter FUNCSEL_LT = 2'b01;
+	parameter FUNCSEL_LE = 2'b10;
+	parameter FUNCSEL_NE = 2'b11;
+	parameter FUNCSEL_ADD = 3'b000;
+	parameter FUNCSEL_AND = 3'b100;
+	parameter FUNCSEL_OR = 3'b101;
+	parameter FUNCSEL_XOR = 3'b110;
+	
 	// The reset signal comes from the reset button on the DE0 - CV board
 	// RESET_N is active - low, so we flip its value ("reset" is active - high)
 	wire clk, locked;
@@ -123,8 +132,8 @@ module Project(
 	wire [(DBITS - 1) : 0] pcplus_F = PC + INSTSIZE;
 	
 	// Read branch prediction value
-	reg [(DBITS - 1) : 0] branchpred[3 : 0];
-	wire [3 : 0] predidx_F = pcplus_F[5 : 2];
+	reg [(DBITS - 1) : 0] branchpred[7 : 0];
+	wire [7 : 0] predidx_F = pcplus_F[9 : 2];
 	wire [(DBITS - 1) : 0] branchpred_F = branchpred[predidx_F];
 	wire [(DBITS - 1) : 0] pcpred_F = isbranch_D ? branchpred_F : (isjump_D ? jmptarg_D : pcplus_F);
 
@@ -263,22 +272,47 @@ module Project(
 	assign aluin1_A = regval1_A;
 	assign aluin2_A = aluimm_A ? sxtimm_A : regval2_A;
 	
-	always @(alufunc_A or aluin1_A or aluin2_A) begin
-		case(alufunc_A)
-			OP2_EQ : aluout_A = {31'b0, aluin1_A == aluin2_A};
-			OP2_LT : aluout_A = {31'b0, aluin1_A < aluin2_A};
-			OP2_LE : aluout_A = {31'b0, aluin1_A <= aluin2_A};
-			OP2_NE : aluout_A = {31'b0, aluin1_A != aluin2_A};
-			OP2_ADD : aluout_A = aluin1_A + aluin2_A;
-			OP2_AND : aluout_A = aluin1_A & aluin2_A;
-			OP2_OR : aluout_A = aluin1_A | aluin2_A;
-			OP2_XOR : aluout_A = aluin1_A ^ aluin2_A;
-			OP2_SUB : aluout_A = aluin1_A - aluin2_A;
-			OP2_NAND : aluout_A = ~(aluin1_A & aluin2_A);
-			OP2_NOR : aluout_A = ~(aluin1_A | aluin2_A);
-			OP2_NXOR : aluout_A = ~(aluin1_A ^ aluin2_A);
-			default : aluout_A = {DBITS{1'bX}};
-		endcase
+	wire iscomparison = ~alufunc_A[5];
+	wire [1 : 0] comparisonfunc = alufunc_A[1 : 0];
+	wire isbasecalc = ~alufunc_A[3];
+	wire [2 : 0] calcfunc = alufunc_A[2 : 0];
+	
+	wire eq_out = aluin1_A == aluin2_A;
+	wire lt_out = aluin1_A < aluin2_A;
+	wire[(DBITS - 1) : 0] add_out = aluin1_A + aluin2_A;
+	wire[(DBITS - 1) : 0] sub_out = aluin1_A - aluin2_A;
+	wire[(DBITS - 1) : 0] and_out = aluin1_A & aluin2_A;
+	wire[(DBITS - 1) : 0] or_out = aluin1_A | aluin2_A;
+	wire[(DBITS - 1) : 0] xor_out = aluin1_A ^ aluin2_A;
+	
+	always @ * begin
+		if (iscomparison) begin
+			case (comparisonfunc)
+				FUNCSEL_EQ: aluout_A = {31'b0, eq_out};
+				FUNCSEL_LT: aluout_A = {31'b0, lt_out};
+				FUNCSEL_LE: aluout_A = {31'b0, (eq_out | lt_out)};
+				FUNCSEL_NE: aluout_A = {31'b0, ~eq_out};
+				default: aluout_A = {DBITS{1'bX}};
+			endcase
+		end else begin
+			if (isbasecalc) begin
+				case (calcfunc)
+					FUNCSEL_ADD: aluout_A = add_out;
+					FUNCSEL_AND: aluout_A = and_out;
+					FUNCSEL_OR: aluout_A = or_out;
+					FUNCSEL_XOR: aluout_A = xor_out;
+					default: aluout_A = {DBITS{1'bX}};
+				endcase
+			end else begin
+				case (calcfunc)
+					FUNCSEL_ADD: aluout_A = sub_out;
+					FUNCSEL_AND: aluout_A = ~and_out;
+					FUNCSEL_OR: aluout_A = ~or_out;
+					FUNCSEL_XOR: aluout_A = ~xor_out;
+					default: aluout_A = {DBITS{1'bX}};
+				endcase
+			end
+		end
 	end
 
 	// Generate branch and jump signals
@@ -294,7 +328,7 @@ module Project(
 	wire flush_D = !isnop_A & mispred_B;
 	
 	// Set branch prediction values
-	wire [3 : 0] predidx_A = pcplus_A[5 : 2];
+	wire [7 : 0] predidx_A = pcplus_A[9 : 2];
 	
 	always @(posedge clk)
 		if (!reset && isbranch_A)
