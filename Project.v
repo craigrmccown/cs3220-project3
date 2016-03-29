@@ -122,9 +122,11 @@ module Project(
 	// This is the value of "incremented PC", computed in stage 1
 	wire [(DBITS - 1) : 0] pcplus_F = PC + INSTSIZE;
 	
-	// This is the predicted value of the PC
-	// that we used to fetch the next instruction
-	wire [(DBITS - 1) : 0] pcpred_F = pcplus_F;
+	// Read branch prediction value
+	reg [(DBITS - 1) : 0] branchpred[3 : 0];
+	wire [3 : 0] predidx_F = pcplus_F[5 : 2];
+	wire [(DBITS - 1) : 0] branchpred_F = branchpred[predidx_F];
+	wire [(DBITS - 1) : 0] pcpred_F = isbranch_D ? branchpred_F : (isjump_D ? jmptarg_D : pcplus_F);
 
 	// Instruction - fetch
 	(* ram_init_file = IMEMINITFILE *)
@@ -213,6 +215,11 @@ module Project(
 	wire load_hazard_A = hazard_A & selmemout_A;
 	wire load_hazard_M = hazard_M & selmemout_M;
 	wire stall_F = load_hazard_A | load_hazard_M;
+	
+	// Calculate branch and jump targets
+	wire [(DBITS - 1) : 0] immx4_D = sxtimm_D << 2;
+	wire [(DBITS - 1) : 0] brtarg_D = immx4_D + pcplus_D;
+	wire [(DBITS - 1) : 0] jmptarg_D = immx4_D + regval1_D;
 
 	/*
 	 * ----------------------------- ALU ----------------------------- 
@@ -231,7 +238,7 @@ module Project(
 		
 	reg [(OP2BITS - 1) : 0] alufunc_A;
 	reg [(REGNOBITS - 1) : 0] wregno_A;
-	reg [(DBITS - 1) : 0] pcplus_A, sxtimm_A, pcpred_A, regval1_A, regval2_A;
+	reg [(DBITS - 1) : 0] pcplus_A, sxtimm_A, pcpred_A, regval1_A, regval2_A, brtarg_A, jmptarg_A;
 	
 	always @(posedge clk) begin
 		if (!stall_D) begin
@@ -239,13 +246,14 @@ module Project(
 			{aluimm_D, isbranch_D, isjump_D, isnop_D, wrmem_D, selaluout_D, selmemout_D, selpcplus_D, wrreg_D};
 			alufunc_A <= alufunc_D;
 			wregno_A <= wregno_D;
-			{pcplus_A, sxtimm_A, pcpred_A, regval1_A, regval2_A} <= {pcplus_D, sxtimm_D, pcpred_D, regval1_D, regval2_D};
+			{pcplus_A, sxtimm_A, pcpred_A, regval1_A, regval2_A, brtarg_A, jmptarg_A} <=
+			{pcplus_D, sxtimm_D, pcpred_D, regval1_D, regval2_D, brtarg_D, jmptarg_D};
 		end else begin
 			{aluimm_A, isbranch_A, isjump_A, isnop_A, wrmem_A, selaluout_A, selmemout_A, selpcplus_A, wrreg_A} <=
 			{1'bX, 1'b0, 1'b0, 1'b1, 1'b0, 1'bX, 1'bX, 1'bX, 1'b0};
 			alufunc_A <= {OP2BITS{1'bX}};
 			wregno_A <= {REGNOBITS{1'bX}};
-			{pcplus_A, sxtimm_A, pcpred_A, regval1_A, regval2_A} <= {(DBITS * 5){1'bX}};
+			{pcplus_A, sxtimm_A, pcpred_A, regval1_A, regval2_A, brtarg_A, jmptarg_A} <= {(DBITS * 7){1'bX}};
 		end
 	end
 	
@@ -275,9 +283,6 @@ module Project(
 
 	// Generate branch and jump signals
 	wire dobranch_A = isbranch_A & aluout_A[0];
-	wire [(DBITS - 1) : 0] immx4_A = sxtimm_A << 2;
-	wire [(DBITS - 1) : 0] brtarg_A = immx4_A + pcplus_A;
-	wire [(DBITS - 1) : 0] jmptarg_A = immx4_A + regval1_A;
 	
 	// Decide what to do based off of signals and branch prediction
 	wire [(DBITS - 1) : 0] pcgood_A = dobranch_A ? brtarg_A : (isjump_A ? jmptarg_A : pcplus_A);
@@ -287,21 +292,13 @@ module Project(
 	
 	// Generate the flush signals
 	wire flush_D = !isnop_A & mispred_B;
-
-	/*
-	// Branch prediction
 	
-	reg [(DBITS - 1) : 0] pcpred_A;
-	reg [(DBITS - 1) : 0] branchpred_A[(2 << BRANCHPREDBITS) : 0]
-	wire [(BRANCHPREDBITS - 1) : 0] predidx_A = pcplus_A[(BRANCHPREDBITS + 2 - 1) : 2];
+	// Set branch prediction values
+	wire [3 : 0] predidx_A = pcplus_A[5 : 2];
 	
-	always @(posedge clk) begin
-		pcpred_A <= isbranch_A ? branchpred_A[predidx] : (isjump_A ? jmptarg_A : pcplus_A);
-		
-		if (mispred_B)
-			branchpred_A[predidx_A] <= pcgood_B;
-	end
-	*/
+	always @(posedge clk)
+		if (!reset && isbranch_A)
+			branchpred[predidx_A] <= pcgood_B;
 
 	/*
 	 * ----------------------------- MEM ----------------------------- 
