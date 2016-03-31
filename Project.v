@@ -249,17 +249,7 @@ module Project(
 	reg [(DBITS - 1) : 0] rsval_A, rtval_A, forwarded_A_A, forwarded_M_A;
 	
 	always @(posedge clk) begin
-		if (!stall_D) begin
-			{aluimm_A, isbranch_A, isjump_A, isnop_A, wrmem_A, selaluout_A, selmemout_A, selpcplus_A, wrreg_A} <=
-			{aluimm_D, isbranch_D, isjump_D, isnop_D, wrmem_D, selaluout_D, selmemout_D, selpcplus_D, wrreg_D};
-			
-			alufunc_A <= alufunc_D;
-			wregno_A <= wregno_D;
-			{pcplus_A, pcpred_A, sxtimm_A} <= {pcplus_D, pcpred_D, sxtimm_D};
-			
-			{hazard_s_A_A, hazard_t_A_A, hazard_s_M_A, hazard_t_M_A} <= {hazard_s_A_D, hazard_t_A_D, hazard_s_M_D, hazard_t_M_D};
-			{rsval_A, rtval_A, forwarded_A_A, forwarded_M_A} <= {rsval_D, rtval_D, forwarded_A_D, forwarded_M_D};
-		end else begin
+		if (stall_D | flush_A) begin
 			{aluimm_A, isbranch_A, isjump_A, isnop_A, wrmem_A, selaluout_A, selmemout_A, selpcplus_A, wrreg_A} <=
 			{1'bX, 1'b0, 1'b0, 1'b1, 1'b0, 1'bX, 1'bX, 1'bX, 1'b0};
 			
@@ -269,6 +259,16 @@ module Project(
 			
 			{hazard_s_A_A, hazard_t_A_A, hazard_s_M_A, hazard_t_M_A} <= {4{1'bX}};
 			{rsval_A, rtval_A, forwarded_A_A, forwarded_M_A} <= {(DBITS * 4){1'bX}};
+		end else begin
+			{aluimm_A, isbranch_A, isjump_A, isnop_A, wrmem_A, selaluout_A, selmemout_A, selpcplus_A, wrreg_A} <=
+			{aluimm_D, isbranch_D, isjump_D, isnop_D, wrmem_D, selaluout_D, selmemout_D, selpcplus_D, wrreg_D};
+			
+			alufunc_A <= alufunc_D;
+			wregno_A <= wregno_D;
+			{pcplus_A, pcpred_A, sxtimm_A} <= {pcplus_D, pcpred_D, sxtimm_D};
+			
+			{hazard_s_A_A, hazard_t_A_A, hazard_s_M_A, hazard_t_M_A} <= {hazard_s_A_D, hazard_t_A_D, hazard_s_M_D, hazard_t_M_D};
+			{rsval_A, rtval_A, forwarded_A_A, forwarded_M_A} <= {rsval_D, rtval_D, forwarded_A_D, forwarded_M_D};
 		end
 	end
 	
@@ -326,20 +326,40 @@ module Project(
 		end
 	end
 
+	/*
+	 * ----------------------------- MEM ----------------------------- 
+	 */
+	 
+	// Create pipeline buffer for M stage
+	reg isbranch_M, isjump_M, isnop_M, wrmem_M, selaluout_M, selmemout_M, selpcplus_M, wrreg_M;
+	reg [(DBITS - 1) : 0] sxtimm_M, aluout_M, pcplus_M, pcpred_M, regval1_M, regval2_M;
+	reg [(REGNOBITS - 1) : 0] wregno_M;
+	
+	always @(posedge clk) begin
+		{isbranch_M, isjump_M, isnop_M, wrmem_M, selaluout_M, selmemout_M, selpcplus_M, wrreg_M} <=
+		{isbranch_A, isjump_A, isnop_A, wrmem_A, selaluout_A, selmemout_A, selpcplus_A, wrreg_A};
+		
+		{sxtimm_M, aluout_M, pcplus_M, pcpred_M, regval1_M, regval2_M} <=
+		{sxtimm_A, aluout_A, pcplus_A, pcpred_A, regval1_A, regval2_A};
+		
+		wregno_M <= wregno_A;
+	end
+
 	// Generate branch and jump signals
-	wire dobranch_A = isbranch_A & aluout_A[0];
-	wire [(DBITS - 1) : 0] immx4_A = sxtimm_A << 2;
-	wire [(DBITS - 1) : 0] brtarg_A = immx4_A + pcplus_A;
-	wire [(DBITS - 1) : 0] jmptarg_A = immx4_A + regval1_A;
+	wire dobranch_M = isbranch_M & aluout_M[0];
+	wire [(DBITS - 1) : 0] immx4_M = sxtimm_M << 2;
+	wire [(DBITS - 1) : 0] brtarg_M = immx4_M + pcplus_M;
+	wire [(DBITS - 1) : 0] jmptarg_M = immx4_M + regval1_M;
 	
 	// Decide what to do based off of signals and branch prediction
-	wire [(DBITS - 1) : 0] pcgood_A = dobranch_A ? brtarg_A : (isjump_A ? jmptarg_A : pcplus_A);
-	wire mispred_A = (pcgood_A != pcpred_A);
-	wire mispred_B = mispred_A && !isnop_A;
-	wire [(DBITS - 1) : 0] pcgood_B = pcgood_A;
+	wire [(DBITS - 1) : 0] pcgood_M = dobranch_M ? brtarg_M : (isjump_M ? jmptarg_M : pcplus_M);
+	wire mispred_M = (pcgood_M != pcpred_M);
+	wire mispred_B = mispred_M && !isnop_M;
+	wire [(DBITS - 1) : 0] pcgood_B = pcgood_M;
 	
 	// Generate the flush signals
 	wire flush_D = !isnop_A & mispred_B;
+	wire flush_A = flush_D;
 	
 	// Set branch prediction values
 	wire [7 : 0] predidx_A = pcplus_A[9 : 2];
@@ -347,25 +367,6 @@ module Project(
 	always @(posedge clk)
 		if (!reset && isbranch_A)
 			branchpred[predidx_A] <= pcgood_B;
-
-	wire flush_D = 1'bX;
-	wire pcgood_B = 1'bX;
-	wire [(DBITS - 1) : 0] pcgood_B = {DBITS{1'bX}};
-
-	/*
-	 * ----------------------------- MEM ----------------------------- 
-	 */
-	 
-	// Create pipeline buffer for M stage
-	reg wrmem_M, selaluout_M, selmemout_M, selpcplus_M, wrreg_M;
-	reg [(DBITS - 1) : 0] aluout_M, pcplus_M, regval2_M;
-	reg [(REGNOBITS - 1) : 0] wregno_M;
-	
-	always @(posedge clk) begin
-		{wrmem_M, selaluout_M, selmemout_M, selpcplus_M, wrreg_M} <= {wrmem_A, selaluout_A, selmemout_A, selpcplus_A, wrreg_A};
-		{aluout_M, pcplus_M, regval2_M} <= {aluout_A, pcplus_A, regval2_A};
-		wregno_M <= wregno_A;
-	end
 		
 	// Create memory signals
 	wire [(DBITS - 1) : 0] memaddr_M, wmemval_M;
