@@ -135,7 +135,7 @@ module Project(
 	reg [(DBITS - 1) : 0] branchpred[7 : 0];
 	wire [7 : 0] predidx_F = pcplus_F[9 : 2];
 	wire [(DBITS - 1) : 0] branchpred_F = branchpred[predidx_F];
-	wire [(DBITS - 1) : 0] pcpred_F = isbranch_D ? branchpred_F : (isjump_D ? jmptarg_D : pcplus_F);
+	wire [(DBITS - 1) : 0] pcpred_F = isbranch_D ? branchpred_F : pcplus_F;
 
 	// Instruction - fetch
 	(* ram_init_file = IMEMINITFILE *)
@@ -225,11 +225,6 @@ module Project(
 	wire load_hazard_M = hazard_M & selmemout_M;
 	wire stall_F = load_hazard_A | load_hazard_M;
 	
-	// Calculate branch and jump targets
-	wire [(DBITS - 1) : 0] immx4_D = sxtimm_D << 2;
-	wire [(DBITS - 1) : 0] brtarg_D = immx4_D + pcplus_D;
-	wire [(DBITS - 1) : 0] jmptarg_D = immx4_D + regval1_D;
-	
 	// Calculate ALU inputs
 	wire signed [(DBITS - 1) : 0] aluin1_D = regval1_D;
 	wire signed [(DBITS - 1) : 0] aluin2_D = aluimm_D ? sxtimm_D : regval2_D;
@@ -251,7 +246,7 @@ module Project(
 		
 	reg [(OP2BITS - 1) : 0] alufunc_A;
 	reg [(REGNOBITS - 1) : 0] wregno_A;
-	reg [(DBITS - 1) : 0] pcplus_A, pcpred_A, regval2_A, brtarg_A, jmptarg_A, aluin1_A, aluin2_A, sub_out_A;
+	reg [(DBITS - 1) : 0] pcplus_A, pcpred_A, regval1_A, regval2_A, sxtimm_A, aluin1_A, aluin2_A, sub_out_A;
 	
 	always @(posedge clk) begin
 		if (!stall_D) begin
@@ -259,14 +254,14 @@ module Project(
 			{isbranch_D, isjump_D, isnop_D, wrmem_D, selaluout_D, selmemout_D, selpcplus_D, wrreg_D};
 			alufunc_A <= alufunc_D;
 			wregno_A <= wregno_D;
-			{pcplus_A, pcpred_A, regval2_A, brtarg_A, jmptarg_A, aluin1_A, aluin2_A, sub_out_A} <=
-			{pcplus_D, pcpred_D, regval2_D, brtarg_D, jmptarg_D, aluin1_D, aluin2_D, sub_out_D};
+			{pcplus_A, pcpred_A, regval1_A, regval2_A, sxtimm_A, aluin1_A, aluin2_A, sub_out_A} <=
+			{pcplus_D, pcpred_D, regval1_D, regval2_D, sxtimm_D, aluin1_D, aluin2_D, sub_out_D};
 		end else begin
 			{isbranch_A, isjump_A, isnop_A, wrmem_A, selaluout_A, selmemout_A, selpcplus_A, wrreg_A} <=
 			{1'b0, 1'b0, 1'b1, 1'b0, 1'bX, 1'bX, 1'bX, 1'b0};
 			alufunc_A <= {OP2BITS{1'bX}};
 			wregno_A <= {REGNOBITS{1'bX}};
-			{pcplus_A, pcpred_A, regval2_A, brtarg_A, jmptarg_A, aluin1_A, aluin2_A, sub_out_A} <= {(DBITS * 8){1'bX}};
+			{pcplus_A, pcpred_A, regval1_A, regval2_A, sxtimm_A, aluin1_A, aluin2_A, sub_out_A} <= {(DBITS * 8){1'bX}};
 		end
 	end
 	
@@ -317,6 +312,9 @@ module Project(
 
 	// Generate branch and jump signals
 	wire dobranch_A = isbranch_A & aluout_A[0];
+	wire [(DBITS - 1) : 0] immx4_A = sxtimm_A << 2;
+	wire [(DBITS - 1) : 0] brtarg_A = immx4_A + pcplus_A;
+	wire [(DBITS - 1) : 0] jmptarg_A = immx4_A + regval1_A;
 	
 	// Decide what to do based off of signals and branch prediction
 	wire [(DBITS - 1) : 0] pcgood_A = dobranch_A ? brtarg_A : (isjump_A ? jmptarg_A : pcplus_A);
