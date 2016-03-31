@@ -207,35 +207,28 @@ module Project(
 	
 	// Hazard detection
 	wire reading_t_D = ~aluimm_D | wrmem_D;
-	wire hazard_s_A = wrreg_A & (wregno_A == rs_D);
-	wire hazard_t_A = wrreg_A & reading_t_D & (wregno_A == rt_D);
-	wire hazard_s_M = wrreg_M & (wregno_M == rs_D);
-	wire hazard_t_M = wrreg_M & reading_t_D & (wregno_M == rt_D);
-	wire hazard_A = hazard_s_A | hazard_t_A;
-	wire hazard_M = hazard_s_M | hazard_t_M;
+	wire hazard_s_A_D = wrreg_A & (wregno_A == rs_D);
+	wire hazard_t_A_D = wrreg_A & reading_t_D & (wregno_A == rt_D);
+	wire hazard_s_M_D = wrreg_M & (wregno_M == rs_D);
+	wire hazard_t_M_D = wrreg_M & reading_t_D & (wregno_M == rt_D);
 	
 	// Data forwarding
-	wire [(DBITS - 1) : 0] forwarded_A = selaluout_A ? aluout_A : pcplus_A;
-	wire [(DBITS - 1) : 0] forwarded_M = selaluout_M ? aluout_M : pcplus_M;
-	wire [(DBITS - 1) : 0] regval1_D = hazard_s_A ? forwarded_A : (hazard_s_M ? forwarded_M : rsval_D);
-	wire [(DBITS - 1) : 0] regval2_D = hazard_t_A ? forwarded_A : (hazard_t_M ? forwarded_M : rtval_D);
+	wire [(DBITS - 1) : 0] forwarded_A_D = selaluout_A ? aluout_A : pcplus_A;
+	wire [(DBITS - 1) : 0] forwarded_M_D = selaluout_M ? aluout_M : pcplus_M;
 	
 	// Generate stall signals (only for LW instructions)
-	wire load_hazard_A = hazard_A & selmemout_A;
-	wire load_hazard_M = hazard_M & selmemout_M;
+	wire load_hazard_A = hazard_s_A_D | hazard_t_A_D & selmemout_A;
+	wire load_hazard_M = hazard_s_M_D | hazard_t_M_D & selmemout_M;
 	wire stall_F = load_hazard_A | load_hazard_M;
-	
-	// Calculate ALU inputs
-	wire signed [(DBITS - 1) : 0] aluin1_D = regval1_D;
-	wire signed [(DBITS - 1) : 0] aluin2_D = aluimm_D ? sxtimm_D : regval2_D;
-	wire [(DBITS - 1) : 0] sub_out_D = aluin1_D - aluin2_D;
 
 	/*
 	 * ----------------------------- ALU ----------------------------- 
 	 */
 
 	// Create pipeline buffer for stage A
-	reg isbranch_A,
+	
+	reg aluimm_A,
+		isbranch_A,
 		isjump_A,
 		isnop_A,
 		wrmem_A,
@@ -246,33 +239,56 @@ module Project(
 		
 	reg [(OP2BITS - 1) : 0] alufunc_A;
 	reg [(REGNOBITS - 1) : 0] wregno_A;
-	reg [(DBITS - 1) : 0] pcplus_A, pcpred_A, regval1_A, regval2_A, sxtimm_A, aluin1_A, aluin2_A, sub_out_A;
+	reg [(DBITS - 1) : 0] pcplus_A, pcpred_A, sxtimm_A;
+	
+	reg hazard_s_A_A,
+		hazard_t_A_A,
+		hazard_s_M_A,
+		hazard_t_M_A;
+		
+	reg [(DBITS - 1) : 0] rsval_A, rtval_A, forwarded_A_A, forwarded_M_A;
 	
 	always @(posedge clk) begin
 		if (!stall_D) begin
-			{isbranch_A, isjump_A, isnop_A, wrmem_A, selaluout_A, selmemout_A, selpcplus_A, wrreg_A} <=
-			{isbranch_D, isjump_D, isnop_D, wrmem_D, selaluout_D, selmemout_D, selpcplus_D, wrreg_D};
+			{aluimm_A, isbranch_A, isjump_A, isnop_A, wrmem_A, selaluout_A, selmemout_A, selpcplus_A, wrreg_A} <=
+			{aluimm_D, isbranch_D, isjump_D, isnop_D, wrmem_D, selaluout_D, selmemout_D, selpcplus_D, wrreg_D};
+			
 			alufunc_A <= alufunc_D;
 			wregno_A <= wregno_D;
-			{pcplus_A, pcpred_A, regval1_A, regval2_A, sxtimm_A, aluin1_A, aluin2_A, sub_out_A} <=
-			{pcplus_D, pcpred_D, regval1_D, regval2_D, sxtimm_D, aluin1_D, aluin2_D, sub_out_D};
+			{pcplus_A, pcpred_A, sxtimm_A} <= {pcplus_D, pcpred_D, sxtimm_D};
+			
+			{hazard_s_A_A, hazard_t_A_A, hazard_s_M_A, hazard_t_M_A} <= {hazard_s_A_D, hazard_t_A_D, hazard_s_M_D, hazard_t_M_D};
+			{rsval_A, rtval_A, forwarded_A_A, forwarded_M_A} <= {rsval_D, rtval_D, forwarded_A_D, forwarded_M_D};
 		end else begin
-			{isbranch_A, isjump_A, isnop_A, wrmem_A, selaluout_A, selmemout_A, selpcplus_A, wrreg_A} <=
-			{1'b0, 1'b0, 1'b1, 1'b0, 1'bX, 1'bX, 1'bX, 1'b0};
+			{aluimm_A, isbranch_A, isjump_A, isnop_A, wrmem_A, selaluout_A, selmemout_A, selpcplus_A, wrreg_A} <=
+			{1'bX, 1'b0, 1'b0, 1'b1, 1'b0, 1'bX, 1'bX, 1'bX, 1'b0};
+			
 			alufunc_A <= {OP2BITS{1'bX}};
 			wregno_A <= {REGNOBITS{1'bX}};
-			{pcplus_A, pcpred_A, regval1_A, regval2_A, sxtimm_A, aluin1_A, aluin2_A, sub_out_A} <= {(DBITS * 8){1'bX}};
+			{pcplus_A, pcpred_A, sxtimm_A} <= {(DBITS * 3){1'bX}};
+			
+			{hazard_s_A_A, hazard_t_A_A, hazard_s_M_A, hazard_t_M_A} <= {4{1'bX}};
+			{rsval_A, rtval_A, forwarded_A_A, forwarded_M_A} <= {(DBITS * 4){1'bX}};
 		end
 	end
 	
-	// Create ALU
-	reg [(DBITS - 1) : 0] aluout_A;
+	// Decide whether to use forwarded values
+	wire [(DBITS - 1) : 0] regval1_A = hazard_s_A_A ? forwarded_A_A : (hazard_s_M_A ? forwarded_M_A : rsval_A);
+	wire [(DBITS - 1) : 0] regval2_A = hazard_t_A_A ? forwarded_A_A : (hazard_t_M_A ? forwarded_M_A : rtval_A);
 	
+	// Instruction type selection
 	wire iscomparison = ~alufunc_A[5];
 	wire [1 : 0] comparisonfunc = alufunc_A[1 : 0];
 	wire isbasecalc = ~alufunc_A[3];
 	wire [2 : 0] calcfunc = alufunc_A[2 : 0];
 	
+	// Calculate inputs
+	wire signed [(DBITS - 1) : 0] aluin1_A = regval1_A;
+	wire signed [(DBITS - 1) : 0] aluin2_A = aluimm_A ? sxtimm_A : regval2_A;
+	
+	// Calculate outputs
+	reg [(DBITS - 1) : 0] aluout_A;
+	wire [(DBITS - 1) : 0] sub_out_A = aluin1_A - aluin2_A;
 	wire[(DBITS - 1) : 0] add_out = aluin1_A + aluin2_A;
 	wire[(DBITS - 1) : 0] and_out = aluin1_A & aluin2_A;
 	wire[(DBITS - 1) : 0] or_out = aluin1_A | aluin2_A;
@@ -331,6 +347,10 @@ module Project(
 	always @(posedge clk)
 		if (!reset && isbranch_A)
 			branchpred[predidx_A] <= pcgood_B;
+
+	wire flush_D = 1'bX;
+	wire pcgood_B = 1'bX;
+	wire [(DBITS - 1) : 0] pcgood_B = {DBITS{1'bX}};
 
 	/*
 	 * ----------------------------- MEM ----------------------------- 
