@@ -132,7 +132,7 @@ module Project(
 	reg [(DBITS - 1) : 0] branchpred[7 : 0];
 	wire [7 : 0] predidx_F = pcplus_F[9 : 2];
 	wire [(DBITS - 1) : 0] branchpred_F = branchpred[predidx_F];
-	wire [(DBITS - 1) : 0] pcpred_F = isbranch_D ? branchpred_F : pcplus_F;
+	wire [(DBITS - 1) : 0] pcpred_F = (isbranch_D | isjump_D) ? branchpred_F : pcplus_F;
 
 	// Instruction - fetch
 	(* ram_init_file = IMEMINITFILE *)
@@ -354,7 +354,7 @@ module Project(
 	wire [7 : 0] predidx_M = pcplus_M[9 : 2];
 	
 	always @(posedge clk)
-		if (!reset && isbranch_M)
+		if (!reset && (isbranch_M || isjump_M))
 			branchpred[predidx_M] <= pcgood_M;
 
 	// Create memory signals
