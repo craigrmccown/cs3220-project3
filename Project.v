@@ -81,7 +81,7 @@ module Project(
 	);
 	
 	wire reset = !locked;
-
+	
 	/*
 	reg clk;
 	reg reset;
@@ -113,16 +113,13 @@ module Project(
 	// The PC register and update logic
 	reg [(DBITS - 1) : 0] PC;
 	
-	always @(posedge clk) begin
+	always @(posedge clk)
 		if (reset)
 			PC <= STARTPC;
-		else if (stall_F)
-			PC <= PC;
-		else if (mispred_B)
-			PC <= pcgood_B;
-		else
-			PC <= pcpred_F;
-	end
+		else if (mispred_M)
+			PC <= pcgood_M;
+		else if (!stall_F)
+				PC <= pcpred_F;
 		
 	/*
 	 * ----------------------------- FETCH ----------------------------- 
@@ -147,14 +144,11 @@ module Project(
 	 */
 	 
 	// Create pipeline buffer for stage D
-	wire stall_D = stall_F;
 	wire [(DBITS - 1) : 0] inst_D = inst_F;
 	wire [(DBITS - 1) : 0] pcplus_D = pcplus_F;
 	wire [(DBITS - 1) : 0] pcpred_D = pcpred_F;
 	
 	// Instruction decoding
-	// These have zero delay from inst_D
-	// because they are just new names for those signals
 	wire [(OP1BITS - 1) : 0] op1_D = inst_D[(DBITS - 1) : (DBITS - OP1BITS)];
 	wire [(REGNOBITS - 1) : 0] rs_D, rt_D, rd_D;
 	assign {rs_D, rt_D, rd_D} = inst_D[(DBITS - OP1BITS - 1) : (DBITS - OP1BITS - 3 * REGNOBITS)];
@@ -175,58 +169,55 @@ module Project(
 	
 	// Decoding logic
 	always @ * begin
-		{aluimm_D, alufunc_D} = {1'bX,{OP2BITS{1'bX}}};
-		{isbranch_D, isjump_D, isnop_D, wrmem_D} = {1'b0, 1'b0, 1'b0, 1'b0};
-		{selaluout_D, selmemout_D, selpcplus_D, wregno_D, wrreg_D} = {1'bX, 1'bX, 1'bX, {REGNOBITS{1'bX}}, 1'b0};
+		{aluimm_D, isbranch_D, isjump_D, isnop_D, wrmem_D, selaluout_D, selmemout_D, selpcplus_D, wrreg_D} = {9{1'b0}};
+		alufunc_D = {OP2BITS{1'b0}};
+		wregno_D = {REGNOBITS{1'b0}};
 		
-		if(reset | flush_D)
-			isnop_D = 1'b1;
-		else case (op1_D)
-			OP1_ALUR:
-				{aluimm_D, alufunc_D, selaluout_D, selmemout_D, selpcplus_D, wregno_D, wrreg_D} =
-				{1'b0, op2_D, 1'b1, 1'b0, 1'b0, rd_D, 1'b1};
+		case (op1_D)
+			OP1_ALUR: {alufunc_D, selaluout_D, wregno_D, wrreg_D} = {op2_D, 1'b1, rd_D, 1'b1};
 			default:
 				case (op1_D)
 					OP1_BEQ, OP1_BNE, OP1_BLT, OP1_BLE:
-						{aluimm_D, alufunc_D, isbranch_D} = {1'b0, op1_D, 1'b1};
+						{alufunc_D, isbranch_D} = {op1_D, 1'b1};
 					OP1_SW:
 						{aluimm_D, alufunc_D, wrmem_D} = {1'b1, OP1_ADDI, 1'b1};
 					OP1_JAL:
-						{aluimm_D, alufunc_D, wrreg_D, wregno_D, isjump_D, selaluout_D, selmemout_D, selpcplus_D} =
-						{1'b1, OP1_ADDI, 1'b1, rt_D, 1'b1, 1'b0, 1'b0, 1'b1};
+						{aluimm_D, alufunc_D, wrreg_D, wregno_D, isjump_D, selpcplus_D} = {1'b1, OP1_ADDI, 1'b1, rt_D, 1'b1, 1'b1};
 					OP1_LW:
-						{aluimm_D, alufunc_D, wrreg_D, wregno_D, selaluout_D, selmemout_D, selpcplus_D} =
-						{1'b1, OP1_ADDI, 1'b1, rt_D, 1'b0, 1'b1, 1'b0};
+						{aluimm_D, alufunc_D, wrreg_D, wregno_D, selmemout_D} = {1'b1, OP1_ADDI, 1'b1, rt_D, 1'b1};
 					OP1_ADDI, OP1_ANDI, OP1_ORI, OP1_XORI:
-						{aluimm_D, alufunc_D, wrreg_D, wregno_D, selaluout_D, selmemout_D, selpcplus_D} =
-						{1'b1, op1_D, 1'b1, rt_D, 1'b1, 1'b0, 1'b0};
-					default:  isnop_D = 1'b1;
+						{aluimm_D, alufunc_D, wrreg_D, wregno_D, selaluout_D} = {1'b1, op1_D, 1'b1, rt_D, 1'b1};
+					default:
+						isnop_D = 1'b1;
 				endcase
 		endcase
 	end
 	
 	// Hazard detection
-	wire reading_t_D = ~aluimm_D | wrmem_D;
-	wire hazard_s_A_D = wrreg_A & (wregno_A == rs_D);
-	wire hazard_t_A_D = wrreg_A & reading_t_D & (wregno_A == rt_D);
-	wire hazard_s_M_D = wrreg_M & (wregno_M == rs_D);
-	wire hazard_t_M_D = wrreg_M & reading_t_D & (wregno_M == rt_D);
+	wire hazard_s_A = wrreg_A & (wregno_A == rs_D);
+	wire hazard_t_A = wrreg_A & (wregno_A == rt_D);
+	wire hazard_s_M = wrreg_M & (wregno_M == rs_D);
+	wire hazard_t_M = wrreg_M & (wregno_M == rt_D);
 	
 	// Data forwarding
-	wire [(DBITS - 1) : 0] forwarded_A_D = selaluout_A ? aluout_A : pcplus_A;
-	wire [(DBITS - 1) : 0] forwarded_M_D = selaluout_M ? aluout_M : pcplus_M;
+	wire [(DBITS - 1) : 0] regval1_D =
+		hazard_s_A ? result_A :
+		hazard_s_M ? result_M : rsval_D;
+		
+	wire [(DBITS - 1) : 0] regval2_D =
+		hazard_t_A ? result_A :
+		hazard_t_M ? result_M : rtval_D;
 	
 	// Generate stall signals (only for LW instructions)
-	wire load_hazard_A = hazard_s_A_D | hazard_t_A_D & selmemout_A;
-	wire load_hazard_M = hazard_s_M_D | hazard_t_M_D & selmemout_M;
-	wire stall_F = load_hazard_A | load_hazard_M;
+	wire reading_t_D = ~aluimm_D | wrmem_D;
+	wire stall_F = (hazard_s_A | (hazard_t_A & reading_t_D)) & selmemout_A;
+	wire stall_D = stall_F;
 
 	/*
 	 * ----------------------------- ALU ----------------------------- 
 	 */
 
 	// Create pipeline buffer for stage A
-	
 	reg aluimm_A,
 		isbranch_A,
 		isjump_A,
@@ -237,46 +228,32 @@ module Project(
 		selpcplus_A,
 		wrreg_A;
 		
+	reg [(DBITS - 1) : 0] pcplus_A, pcpred_A, sxtimm_A, regval1_A, regval2_A;
 	reg [(OP2BITS - 1) : 0] alufunc_A;
 	reg [(REGNOBITS - 1) : 0] wregno_A;
-	reg [(DBITS - 1) : 0] pcplus_A, pcpred_A, sxtimm_A;
-	
-	reg hazard_s_A_A,
-		hazard_t_A_A,
-		hazard_s_M_A,
-		hazard_t_M_A;
-		
-	reg [(DBITS - 1) : 0] rsval_A, rtval_A, forwarded_A_A, forwarded_M_A;
 	
 	always @(posedge clk) begin
-		if (stall_D | flush_A) begin
+		if (stall_D | flush_D) begin
 			{aluimm_A, isbranch_A, isjump_A, isnop_A, wrmem_A, selaluout_A, selmemout_A, selpcplus_A, wrreg_A} <=
-			{1'bX, 1'b0, 1'b0, 1'b1, 1'b0, 1'bX, 1'bX, 1'bX, 1'b0};
+			{1'b0, 1'b0, 1'b0, 1'b1, 1'b0, 1'b0, 1'b0, 1'b0, 1'b0};
 			
-			alufunc_A <= {OP2BITS{1'bX}};
-			wregno_A <= {REGNOBITS{1'bX}};
-			{pcplus_A, pcpred_A, sxtimm_A} <= {(DBITS * 3){1'bX}};
+			{pcplus_A, pcpred_A, sxtimm_A, regval1_A, regval2_A} <= {(DBITS * 5){1'b0}};
 			
-			{hazard_s_A_A, hazard_t_A_A, hazard_s_M_A, hazard_t_M_A} <= {4{1'bX}};
-			{rsval_A, rtval_A, forwarded_A_A, forwarded_M_A} <= {(DBITS * 4){1'bX}};
+			alufunc_A <= {OP2BITS{1'b0}};
+			wregno_A <= {REGNOBITS{1'b0}};
 		end else begin
 			{aluimm_A, isbranch_A, isjump_A, isnop_A, wrmem_A, selaluout_A, selmemout_A, selpcplus_A, wrreg_A} <=
 			{aluimm_D, isbranch_D, isjump_D, isnop_D, wrmem_D, selaluout_D, selmemout_D, selpcplus_D, wrreg_D};
 			
+			{pcplus_A, pcpred_A, sxtimm_A, regval1_A, regval2_A} <=
+			{pcplus_D, pcpred_D, sxtimm_D, regval1_D, regval2_D};
+			
 			alufunc_A <= alufunc_D;
 			wregno_A <= wregno_D;
-			{pcplus_A, pcpred_A, sxtimm_A} <= {pcplus_D, pcpred_D, sxtimm_D};
-			
-			{hazard_s_A_A, hazard_t_A_A, hazard_s_M_A, hazard_t_M_A} <= {hazard_s_A_D, hazard_t_A_D, hazard_s_M_D, hazard_t_M_D};
-			{rsval_A, rtval_A, forwarded_A_A, forwarded_M_A} <= {rsval_D, rtval_D, forwarded_A_D, forwarded_M_D};
 		end
 	end
 	
-	// Decide whether to use forwarded values
-	wire [(DBITS - 1) : 0] regval1_A = hazard_s_A_A ? forwarded_A_A : (hazard_s_M_A ? forwarded_M_A : rsval_A);
-	wire [(DBITS - 1) : 0] regval2_A = hazard_t_A_A ? forwarded_A_A : (hazard_t_M_A ? forwarded_M_A : rtval_A);
-	
-	// Instruction type selection
+	// Instruction type selection -- move to decode
 	wire iscomparison = ~alufunc_A[5];
 	wire [1 : 0] comparisonfunc = alufunc_A[1 : 0];
 	wire isbasecalc = ~alufunc_A[3];
@@ -325,7 +302,12 @@ module Project(
 			end
 		end
 	end
-
+	
+	// Result for forwarding
+	wire [(DBITS - 1) : 0] result_A =
+		selaluout_A ? aluout_A :
+		selpcplus_A ? pcplus_A : {DBITS{1'bX}};
+	
 	/*
 	 * ----------------------------- MEM ----------------------------- 
 	 */
@@ -336,13 +318,22 @@ module Project(
 	reg [(REGNOBITS - 1) : 0] wregno_M;
 	
 	always @(posedge clk) begin
-		{isbranch_M, isjump_M, isnop_M, wrmem_M, selaluout_M, selmemout_M, selpcplus_M, wrreg_M} <=
-		{isbranch_A, isjump_A, isnop_A, wrmem_A, selaluout_A, selmemout_A, selpcplus_A, wrreg_A};
-		
-		{sxtimm_M, aluout_M, pcplus_M, pcpred_M, regval1_M, regval2_M} <=
-		{sxtimm_A, aluout_A, pcplus_A, pcpred_A, regval1_A, regval2_A};
-		
-		wregno_M <= wregno_A;
+		if (flush_A) begin
+			{isbranch_M, isjump_M, isnop_M, wrmem_M, selaluout_M, selmemout_M, selpcplus_M, wrreg_M} <=
+			{1'b0, 1'b0, 1'b1, 1'b0, 1'b0, 1'b0, 1'b0, 1'b0};
+			
+			{sxtimm_M, aluout_M, pcplus_M, pcpred_M, regval1_M, regval2_M} <= {(DBITS * 6){1'b0}};
+			
+			wregno_M <= {REGNOBITS{1'b0}};
+		end else begin
+			{isbranch_M, isjump_M, isnop_M, wrmem_M, selaluout_M, selmemout_M, selpcplus_M, wrreg_M} <=
+			{isbranch_A, isjump_A, isnop_A, wrmem_A, selaluout_A, selmemout_A, selpcplus_A, wrreg_A};
+			
+			{sxtimm_M, aluout_M, pcplus_M, pcpred_M, regval1_M, regval2_M} <=
+			{sxtimm_A, aluout_A, pcplus_A, pcpred_A, regval1_A, regval2_A};
+			
+			wregno_M <= wregno_A;
+		end
 	end
 
 	// Generate branch and jump signals
@@ -353,21 +344,19 @@ module Project(
 	
 	// Decide what to do based off of signals and branch prediction
 	wire [(DBITS - 1) : 0] pcgood_M = dobranch_M ? brtarg_M : (isjump_M ? jmptarg_M : pcplus_M);
-	wire mispred_M = (pcgood_M != pcpred_M);
-	wire mispred_B = mispred_M && !isnop_M;
-	wire [(DBITS - 1) : 0] pcgood_B = pcgood_M;
+	wire mispred_M = (pcgood_M != pcpred_M) && !isnop_M;
 	
 	// Generate the flush signals
-	wire flush_D = !isnop_A & mispred_B;
+	wire flush_D = ~isnop_M & mispred_M;
 	wire flush_A = flush_D;
 	
 	// Set branch prediction values
-	wire [7 : 0] predidx_A = pcplus_A[9 : 2];
+	wire [7 : 0] predidx_M = pcplus_M[9 : 2];
 	
 	always @(posedge clk)
-		if (!reset && isbranch_A)
-			branchpred[predidx_A] <= pcgood_B;
-		
+		if (!reset && isbranch_M)
+			branchpred[predidx_M] <= pcgood_M;
+
 	// Create memory signals
 	wire [(DBITS - 1) : 0] memaddr_M, wmemval_M;
 	assign {memaddr_M, wmemval_M} = {aluout_M, regval2_M};
@@ -381,8 +370,43 @@ module Project(
 	SevenSeg ss1(.OUT(HEX1),.IN(HexOut[7 : 4]));
 	SevenSeg ss0(.OUT(HEX0),.IN(HexOut[3 : 0]));
 	
+	/*
+	reg [23 : 0] debug;
+	wire [31 : 0] pcval_M = pcplus_M - 4;
+	
+	always @(posedge clk)
+		if (reset)
+			debug = 24'b0;
+		else if (pcval_M == 32'h00000138)
+			debug[0] = 1'b1;
+		else if (pcval_M == 32'h0000013C)
+			debug[1] = 1'b1;
+		else if (pcval_M == 32'h00000140)
+			debug[2] = 1'b1;
+		else if (pcval_M == 32'h00000144)
+			debug[3] = 1'b1;
+		else if (pcval_M == 32'h00000148)
+			debug[4] = 1'b1;
+		else if (pcval_M == 32'h0000014C)
+			debug[5] = 1'b1;
+		else if (pcval_M == 32'h00000150)
+			debug[6] = 1'b1;
+		else if (pcval_M == 32'h00000154)
+			debug[7] = 1'b1;
+		else if (pcval_M == 32'h00000158)
+			debug[8] = 1'b1;
+		else if (pcval_M == 32'h0000015C)
+			debug[9] = 1'b1;
+		else if (pcval_M == 32'h00000160)
+			debug[10] = 1'b1;
+		else if (pcval_M == 32'h00000164)
+			debug[11] = 1'b1;
+		else if (pcval_M == 32'h00000168)
+			debug[12] = 1'b1;
+	*/
+	
 	always @(posedge clk or posedge reset)
-		if(reset)
+		if (reset)
 			HexOut <= 24'hFEDEAD;
 		else if(wrmem_M && (memaddr_M == ADDRHEX))
 			HexOut <= wmemval_M[23 : 0];
@@ -418,13 +442,15 @@ module Project(
 
 	// Decide what gets written into the destination register (wregval_M),
 	// when it gets written (wrreg_M) and to which register it gets written (wregno_M)
-	wire [(DBITS - 1) : 0] wregval_M = selpcplus_M ? pcplus_M : (
-		selaluout_M ? aluout_M : (
-			selmemout_M ? memout_M : {(DBITS){1'bX}}
-		)
-	);
+	wire [(DBITS - 1) : 0] wregval_M =
+		selpcplus_M ? pcplus_M :
+		selaluout_M ? aluout_M :
+		selmemout_M ? memout_M : {(DBITS){1'bX}};
 
 	always @(posedge clk)
 		if(wrreg_M && !reset)
 			regs[wregno_M] <= wregval_M;
+	
+	// Result for forwarding
+	wire [(DBITS - 1) : 0] result_M = wregval_M;
 endmodule
